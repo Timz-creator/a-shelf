@@ -1,36 +1,17 @@
 "use client";
 
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+
 export function LoginButton() {
+  const supabase = createClientComponentClient();
+
   const handleLogin = async () => {
-    alert("Button clicked");
-
-    // Log environment variables through alert for visibility
-    alert(`
-      Client ID: ${process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "undefined"}
-      Auth URL: ${process.env.NEXT_PUBLIC_AUTH_URL || "undefined"}
-    `);
-
-    // Create Google OAuth URL
-    const googleAuthUrl = new URL(
-      "https://accounts.google.com/o/oauth2/v2/auth"
-    );
-
-    // Add required parameters
-    googleAuthUrl.searchParams.append(
-      "client_id",
-      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!
-    );
-    googleAuthUrl.searchParams.append(
-      "redirect_uri",
-      `${process.env.NEXT_PUBLIC_AUTH_URL}/api/auth/callback/google`
-    );
-    googleAuthUrl.searchParams.append("response_type", "code");
-    googleAuthUrl.searchParams.append("scope", "openid email profile");
-
-    console.log("Final URL:", googleAuthUrl.toString());
-
-    // Redirect to Google
-    window.location.href = googleAuthUrl.toString();
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${location.origin}/auth/callback`,
+      },
+    });
   };
 
   return (
