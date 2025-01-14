@@ -4,55 +4,35 @@ import { ArrowRight, PlusCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TopicDialog } from "/Users/timarleyfoster/Desktop/a-shelf/app/components/homescreen/topic-dialog";
 import { SearchTopics } from "/Users/timarleyfoster/Desktop/a-shelf/app/components/homescreen/search-topics";
+import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
+import { cookies } from "next/headers";
 
 export const metadata: Metadata = {
   title: "'Dashboard | BookMaster'",
   description: "'Your personal learning dashboard'",
 };
 
-const topics = [
-  {
-    id: "python",
-    title: "Python",
-    icon: "🐍",
-    description:
-      "'Learn programming with Python, from basics to advanced concepts.'",
-  },
-  {
-    id: "marketing",
-    title: "Marketing",
-    icon: "📊",
-    description: "'Discover modern marketing strategies and techniques.'",
-  },
-  {
-    id: "philosophy",
-    title: "Philosophy",
-    icon: "🧠",
-    description:
-      "'Explore the fundamental questions of existence, knowledge, and ethics.'",
-  },
-  {
-    id: "design",
-    title: "Design",
-    icon: "🎨",
-    description:
-      "'Master the principles of visual design and user experience.'",
-  },
-  {
-    id: "business",
-    title: "Business",
-    icon: "💼",
-    description: "Learn essential skills for entrepreneurship and management.",
-  },
-  {
-    id: "writing",
-    title: "Writing",
-    icon: "✍️",
-    description: "Improve your writing skills for various genres and purposes.",
-  },
-];
+export default async function DashboardPage() {
+  const supabase = createServerComponentClient({ cookies });
 
-export default function DashboardPage() {
+  const { data: topics, error } = await supabase
+    .from("Topics")
+    .select("*")
+    .order("title", { ascending: true });
+
+  console.log("Topics from Supabase:", topics);
+  console.log("Error if any:", error);
+
+  if (error) {
+    console.error("Error fetching topics:", error);
+    // Handle error state
+  }
+
+  if (!topics) {
+    console.log("No topics found");
+    return null; // or show empty state
+  }
+
   return (
     <div className="min-h-screen bg-white text-black font-sans">
       {/* Hero Section */}

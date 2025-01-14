@@ -33,7 +33,7 @@ export function TopicDialog({ topic }: TopicDialogProps) {
           </div>
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="bg-white">
         <DialogHeader>
           <DialogTitle>{topic.title}</DialogTitle>
           <DialogDescription>{topic.description}</DialogDescription>
