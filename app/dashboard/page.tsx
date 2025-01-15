@@ -20,9 +20,6 @@ export default async function DashboardPage() {
     .select("*")
     .order("title", { ascending: true });
 
-  console.log("Topics from Supabase:", topics);
-  console.log("Error if any:", error);
-
   if (error) {
     console.error("Error fetching topics:", error);
     // Handle error state

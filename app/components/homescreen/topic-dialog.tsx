@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { ArrowRight } from "lucide-react";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,6 +12,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 
 type Topic = {
   id: string;
@@ -23,6 +27,26 @@ type TopicDialogProps = {
 };
 
 export function TopicDialog({ topic }: TopicDialogProps) {
+  const [skillLevel, setSkillLevel] = useState<string | undefined>(undefined);
+  const supabase = createClientComponentClient();
+
+  const handleStartLearning = async () => {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+
+      console.log("Current user:", user?.id);
+      console.log("Selected topic:", topic.id);
+      console.log("Skill level:", skillLevel);
+    } catch (error) {
+      console.error("Error:", error);
+    }
+  };
+
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -33,12 +57,35 @@ export function TopicDialog({ topic }: TopicDialogProps) {
           </div>
         </Button>
       </DialogTrigger>
-      <DialogContent className="bg-white">
+      <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>{topic.title}</DialogTitle>
-          <DialogDescription>{topic.description}</DialogDescription>
+          <DialogTitle className="text-2xl">{topic.title}</DialogTitle>
+          <DialogDescription className="text-base">
+            {topic.description}
+          </DialogDescription>
         </DialogHeader>
-        <Button className="mt-4">
+        <div className="py-4">
+          <h4 className="text-sm font-medium mb-3">Select your skill level:</h4>
+          <RadioGroup onValueChange={setSkillLevel} value={skillLevel}>
+            <div className="flex items-center space-x-2 mb-2">
+              <RadioGroupItem value="beginner" id="beginner" />
+              <Label htmlFor="beginner">Beginner</Label>
+            </div>
+            <div className="flex items-center space-x-2 mb-2">
+              <RadioGroupItem value="intermediate" id="intermediate" />
+              <Label htmlFor="intermediate">Intermediate</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="advanced" id="advanced" />
+              <Label htmlFor="advanced">Advanced</Label>
+            </div>
+          </RadioGroup>
+        </div>
+        <Button
+          className="w-full mt-4"
+          disabled={!skillLevel}
+          onClick={handleStartLearning}
+        >
           Start Learning
           <ArrowRight className="ml-2 h-5 w-5" />
         </Button>
