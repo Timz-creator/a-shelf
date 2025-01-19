@@ -39,9 +39,21 @@ export function TopicDialog({ topic }: TopicDialogProps) {
 
       if (userError) throw userError;
 
-      console.log("Current user:", user?.id);
-      console.log("Selected topic:", topic.id);
-      console.log("Skill level:", skillLevel);
+      // Insert into user_topics
+      const { data, error } = await supabase
+        .from("User_Topics")
+        .insert({
+          user_id: user?.id,
+          topic_id: topic.id,
+          skill_level: skillLevel,
+          status: "in_progress",
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      console.log("Topic selected successfully:", data);
     } catch (error) {
       console.error("Error:", error);
     }
