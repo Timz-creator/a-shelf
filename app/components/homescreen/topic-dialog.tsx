@@ -28,34 +28,54 @@ type TopicDialogProps = {
 
 export function TopicDialog({ topic }: TopicDialogProps) {
   const [skillLevel, setSkillLevel] = useState<string | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
   const supabase = createClientComponentClient();
 
   const handleStartLearning = async () => {
     try {
+      setLoading(true);
+
+      // Get current user
       const {
         data: { user },
         error: userError,
       } = await supabase.auth.getUser();
-
       if (userError) throw userError;
 
-      // Insert into user_topics
-      const { data, error } = await supabase
-        .from("User_Topics")
-        .insert({
-          user_id: user?.id,
-          topic_id: topic.id,
-          skill_level: skillLevel,
-          status: "in_progress",
-        })
-        .select()
-        .single();
+      // Save to user_topics
+      const { error: topicError } = await supabase.from("User_Topics").insert({
+        user_id: user?.id,
+        topic_id: topic.id,
+        skill_level: skillLevel,
+        status: "in_progress",
+      });
 
-      if (error) throw error;
+      if (topicError) throw topicError;
 
-      console.log("Topic selected successfully:", data);
+      // Fetch books for topic
+      const response = await fetch(
+        `/api/books?topic=${encodeURIComponent(topic.title)}`
+      );
+      const books = await response.json();
+
+      // Send books for analysis
+      const analysisResponse = await fetch("/api/analyze-books", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          books: books.items,
+          topic: topic.title,
+        }),
+      });
+
+      const analysis = await analysisResponse.json();
+      console.log("Books analysis:", analysis);
     } catch (error) {
       console.error("Error:", error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -95,10 +115,10 @@ export function TopicDialog({ topic }: TopicDialogProps) {
         </div>
         <Button
           className="w-full mt-4"
-          disabled={!skillLevel}
+          disabled={!skillLevel || loading}
           onClick={handleStartLearning}
         >
-          Start Learning
+          {loading ? "Loading..." : "Start Learning"}
           <ArrowRight className="ml-2 h-5 w-5" />
         </Button>
       </DialogContent>
