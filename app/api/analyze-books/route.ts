@@ -43,7 +43,7 @@ export async function POST(request: Request) {
 
     const completion = await openai.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
-      model: "gpt-4-turbo-preview",
+      model: "gpt-4o",
     });
 
     const analysis = completion.choices[0].message.content;
