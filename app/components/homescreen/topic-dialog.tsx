@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { useSession } from "@/app/providers";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { useRouter } from "next/navigation";
 
 type Topic = {
   id: string;
@@ -30,21 +32,20 @@ export function TopicDialog({ topic }: TopicDialogProps) {
   const [skillLevel, setSkillLevel] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const supabase = createClientComponentClient();
+  const { session } = useSession();
+  const router = useRouter();
 
   const handleStartLearning = async () => {
     try {
       setLoading(true);
 
-      // Get current user
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-      if (userError) throw userError;
+      if (!session?.user) {
+        throw new Error("Please log in to continue");
+      }
 
       // Save to user_topics
       const { error: topicError } = await supabase.from("User_Topics").insert({
-        user_id: user?.id,
+        user_id: session.user.id,
         topic_id: topic.id,
         skill_level: skillLevel,
         status: "in_progress",
@@ -71,7 +72,11 @@ export function TopicDialog({ topic }: TopicDialogProps) {
       });
 
       const analysis = await analysisResponse.json();
-      console.log("Books analysis:", analysis);
+      console.log(
+        "Analysis complete, session check:",
+        await supabase.auth.getSession()
+      );
+      router.push("/learning-path");
     } catch (error) {
       console.error("Error:", error);
     } finally {

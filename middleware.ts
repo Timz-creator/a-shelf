@@ -2,19 +2,25 @@ import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export async function middleware(request: NextRequest) {
+export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req: request, res });
+  const supabase = createMiddlewareClient({ req, res });
 
-  // Check auth state
   const {
     data: { session },
   } = await supabase.auth.getSession();
+  console.log("Middleware checking session:", !!session);
+  console.log("Current path:", req.nextUrl.pathname);
 
-  // Protect dashboard routes
-  if (request.nextUrl.pathname.startsWith("/dashboard")) {
+  // Refresh session if exists
+  const {
+    data: { session: refreshedSession },
+  } = await supabase.auth.getSession();
+
+  // Protected routes
+  if (req.nextUrl.pathname.startsWith("/learning-path")) {
     if (!session) {
-      return NextResponse.redirect(new URL("/auth/login", request.url));
+      return NextResponse.redirect(new URL("/auth/login", req.url));
     }
   }
 
@@ -22,5 +28,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/learning-path/:path*", "/dashboard/:path*"],
 };
