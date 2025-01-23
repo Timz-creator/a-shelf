@@ -1,15 +1,15 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
-import { useSession } from "@/app/providers";
 import ReactFlow, {
   type Node,
   type Edge,
   Controls,
   Background,
-  useNodesState,
-  useEdgesState,
+  NodeTypes,
+  applyNodeChanges,
+  applyEdgeChanges,
   addEdge,
 } from "reactflow";
 import "reactflow/dist/style.css";
@@ -20,65 +20,66 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import BookNode from "@/app/components/graph/BookNode";
+import { nodeTypes } from "@/app/components/graph/nodeTypes";
 
 export default function KnowledgeGraph() {
   const [loading, setLoading] = useState(true);
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const supabase = createClientComponentClient();
-  const { session, loading: sessionLoading } = useSession();
 
-  // Memoize the node types
-  const nodeTypes = useMemo(
-    () => ({
-      default: ({ data }) => (
-        <div className="px-4 py-2 shadow-md rounded-md bg-white border-2">
-          {data.label}
-        </div>
-      ),
-    }),
+  const onNodesChange = useCallback(
+    (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
     []
   );
 
-  // Memoize the edge types
-  const edgeTypes = useMemo(
-    () => ({
-      default: ({ id, source, target }) => (
-        <div className="react-flow__edge-path">{/* Edge content */}</div>
-      ),
-    }),
+  const onEdgesChange = useCallback(
+    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
 
   const onConnect = useCallback(
-    (params: any) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges]
+    (params) => setEdges((eds) => addEdge(params, eds)),
+    []
   );
 
   const fetchGraphData = async () => {
     try {
       setLoading(true);
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      // No need to fetch user separately now
-      if (!session?.user) throw new Error("User not found");
+      if (!session) {
+        throw new Error("No session found");
+      }
 
-      const { data: userTopic } = await supabase
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("User not found");
+
+      const { data: userTopics } = await supabase
         .from("User_Topics")
         .select("topic_id")
-        .eq("user_id", session.user.id)
-        .single();
+        .eq("user_id", user.id)
+        .eq("status", "in_progress")
+        .order("created_at", { ascending: false });
 
-      if (!userTopic) throw new Error("No topic selected");
+      if (!userTopics || userTopics.length === 0) {
+        throw new Error("No topics selected");
+      }
 
-      // Get books for this topic
+      const mostRecentTopic = userTopics[0];
+
       const { data: books } = await supabase
         .from("Books")
         .select("*")
-        .eq("topic_id", userTopic.topic_id);
+        .eq("topic_id", mostRecentTopic.topic_id);
 
       if (!books) throw new Error("No books found");
 
-      // Get connections for these books
       const { data: connections } = await supabase
         .from("Skill_Map")
         .select("*")
@@ -92,39 +93,35 @@ export default function KnowledgeGraph() {
         );
 
       if (books && connections) {
-        // Calculate positions by level
         const levelCounts = {
           beginner: 0,
           intermediate: 0,
           advanced: 0,
         };
 
-        // First pass: count nodes per level
         books.forEach((book) => {
           levelCounts[book.level as keyof typeof levelCounts]++;
         });
 
-        // Calculate horizontal spacing for each level
         const spacing = {
           beginner: 800 / (levelCounts.beginner + 1),
           intermediate: 800 / (levelCounts.intermediate + 1),
           advanced: 800 / (levelCounts.advanced + 1),
         };
 
-        // Track current position for each level
         const currentX = {
           beginner: 0,
           intermediate: 0,
           advanced: 0,
         };
 
-        // Transform to nodes with calculated positions
         const nodes = books.map((book) => {
           const level = book.level as keyof typeof levelCounts;
           currentX[level] += spacing[level];
 
           return {
             id: book.google_books_id,
+            type: "bookNode",
             data: { label: book.title },
             position: {
               x: currentX[level],
@@ -161,19 +158,15 @@ export default function KnowledgeGraph() {
   };
 
   useEffect(() => {
-    if (!sessionLoading) {
-      fetchGraphData();
-    }
-  }, [sessionLoading]);
+    fetchGraphData();
+  }, []);
 
   return (
     <div className="p-4 w-full min-h-screen">
       <Card className="w-full h-[800px]">
         <CardHeader>
           <CardTitle>Knowledge Graph</CardTitle>
-          <CardDescription>
-            Visualizing the relationships between topics and skill levels
-          </CardDescription>
+          <CardDescription>Visualizing topic relationships</CardDescription>
         </CardHeader>
         <CardContent className="h-[calc(100%-100px)] p-0">
           {loading ? (
@@ -185,13 +178,11 @@ export default function KnowledgeGraph() {
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               fitView
               style={{ width: "100%", height: "100%" }}
-              attributionPosition="bottom-left"
             >
               <Background color="#f0f0f0" variant="dots" />
               <Controls />

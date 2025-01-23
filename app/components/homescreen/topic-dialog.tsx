@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
-import { useSession } from "@/app/providers";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -32,20 +31,22 @@ export function TopicDialog({ topic }: TopicDialogProps) {
   const [skillLevel, setSkillLevel] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const supabase = createClientComponentClient();
-  const { session } = useSession();
   const router = useRouter();
 
   const handleStartLearning = async () => {
     try {
       setLoading(true);
 
-      if (!session?.user) {
-        throw new Error("Please log in to continue");
-      }
+      // Get current user
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+      if (userError) throw userError;
 
       // Save to user_topics
       const { error: topicError } = await supabase.from("User_Topics").insert({
-        user_id: session.user.id,
+        user_id: user?.id,
         topic_id: topic.id,
         skill_level: skillLevel,
         status: "in_progress",
@@ -72,10 +73,9 @@ export function TopicDialog({ topic }: TopicDialogProps) {
       });
 
       const analysis = await analysisResponse.json();
-      console.log(
-        "Analysis complete, session check:",
-        await supabase.auth.getSession()
-      );
+      console.log("Books analysis:", analysis);
+
+      // Navigate to learning path
       router.push("/learning-path");
     } catch (error) {
       console.error("Error:", error);

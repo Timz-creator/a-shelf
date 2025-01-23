@@ -2,25 +2,27 @@ import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export async function middleware(req: NextRequest) {
+export async function middleware(request: NextRequest) {
   const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req, res });
+  const supabase = createMiddlewareClient({ req: request, res });
 
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  console.log("Middleware checking session:", !!session);
-  console.log("Current path:", req.nextUrl.pathname);
+  console.log("Middleware Session Check:", {
+    hasSession: !!session,
+    path: request.nextUrl.pathname,
+    timestamp: new Date().toISOString(),
+  });
 
-  // Refresh session if exists
-  const {
-    data: { session: refreshedSession },
-  } = await supabase.auth.getSession();
+  // Add learning-path to protected routes
+  const protectedRoutes = ["/dashboard", "/learning-path"];
 
-  // Protected routes
-  if (req.nextUrl.pathname.startsWith("/learning-path")) {
+  // Check if the current route is protected
+  if (protectedRoutes.includes(request.nextUrl.pathname)) {
+    // Redirect to login if no session
     if (!session) {
-      return NextResponse.redirect(new URL("/auth/login", req.url));
+      return NextResponse.redirect(new URL("/auth/login", request.url));
     }
   }
 
@@ -28,5 +30,14 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/learning-path/:path*", "/dashboard/:path*"],
+  matcher: [
+    /*
+     * Match all request paths except:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - public folder
+     */
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };

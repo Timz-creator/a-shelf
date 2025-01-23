@@ -1,6 +1,7 @@
+import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
-import { createClient } from "@/utils/supabase/server";
 
 // Types for our analysis
 interface BookAnalysis {
@@ -16,7 +17,15 @@ const openai = new OpenAI({
 
 export async function POST(request: Request) {
   try {
-    const supabase = createClient();
+    const supabase = createRouteHandlerClient({ cookies });
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    console.log("Analyze Books Session Check:", {
+      hasSession: !!session,
+      timestamp: new Date().toISOString(),
+    });
+
     const { books, topic } = await request.json();
 
     if (!books || !topic) {
