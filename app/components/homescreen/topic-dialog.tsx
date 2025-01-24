@@ -36,6 +36,11 @@ export function TopicDialog({ topic }: TopicDialogProps) {
   const handleStartLearning = async () => {
     try {
       setLoading(true);
+      console.log("Starting analysis with topic:", {
+        topic,
+        topicId: topic.id,
+        skillLevel,
+      });
 
       // Get current user
       const {
@@ -60,6 +65,15 @@ export function TopicDialog({ topic }: TopicDialogProps) {
       );
       const books = await response.json();
 
+      // Before analyze-books fetch:
+      console.log("Sending to analyze-books:", {
+        books: books.items.length,
+        topic: {
+          id: topic.id,
+          title: topic.title,
+        },
+      });
+
       // Send books for analysis
       const analysisResponse = await fetch("/api/analyze-books", {
         method: "POST",
@@ -68,7 +82,10 @@ export function TopicDialog({ topic }: TopicDialogProps) {
         },
         body: JSON.stringify({
           books: books.items,
-          topic: topic.title,
+          topic: {
+            id: topic.id,
+            title: topic.title,
+          },
         }),
       });
 

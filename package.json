@@ -18,6 +18,7 @@
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.47.12",
+    "@xyflow/react": "^12.4.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.471.0",
@@ -26,7 +27,6 @@
     "openai": "^4.79.1",
     "react": "^18",
     "react-dom": "^18",
-    "reactflow": "^11.11.4",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7"
   },

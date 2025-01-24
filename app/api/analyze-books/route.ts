@@ -27,6 +27,11 @@ export async function POST(request: Request) {
     });
 
     const { books, topic } = await request.json();
+    console.log("Received in analyze-books:", {
+      topicId: topic?.id,
+      topicTitle: topic?.title,
+      booksCount: books?.length,
+    });
 
     if (!books || !topic) {
       return NextResponse.json(
@@ -81,12 +86,14 @@ export async function POST(request: Request) {
     // After parsing
     console.log("Analysis:", analysis);
 
-    // Save books and their relationships
+    // Save each book with topic_id
     for (const book of analysis.books) {
-      // Before saving
-      console.log("Saving book:", book.id, book.difficulty);
+      console.log("Saving book with topic:", {
+        bookId: book.id,
+        topicId: topic?.id,
+        bookTitle: books.find((b) => b.id === book.id)?.volumeInfo.title,
+      });
 
-      // Save book with difficulty
       const bookResult = await supabase.from("Books").upsert({
         google_books_id: book.id,
         level: book.difficulty,
@@ -94,9 +101,10 @@ export async function POST(request: Request) {
         author: books.find((b) => b.id === book.id)?.volumeInfo.authors?.[0],
         description: books.find((b) => b.id === book.id)?.volumeInfo
           .description,
+        topic_id: topic?.id,
       });
 
-      console.log("Book upsert result:", bookResult);
+      console.log("Book save result:", bookResult);
 
       // Before saving relationships
       console.log("Prerequisites:", book.prerequisites);

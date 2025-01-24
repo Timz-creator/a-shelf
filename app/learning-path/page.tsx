@@ -2,17 +2,17 @@
 
 import React, { useState, useCallback, useEffect } from "react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
-import ReactFlow, {
-  type Node,
-  type Edge,
+import {
+  ReactFlow,
+  Node,
+  Edge,
   Controls,
   Background,
-  NodeTypes,
   applyNodeChanges,
   applyEdgeChanges,
   addEdge,
-} from "reactflow";
-import "reactflow/dist/style.css";
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import {
   Card,
   CardContent,
@@ -47,9 +47,12 @@ export default function KnowledgeGraph() {
   const fetchGraphData = async () => {
     try {
       setLoading(true);
+      console.log("1. Starting fetchGraphData");
+
       const {
         data: { session },
       } = await supabase.auth.getSession();
+      console.log("2. Session check:", !!session);
 
       if (!session) {
         throw new Error("No session found");
@@ -58,7 +61,7 @@ export default function KnowledgeGraph() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (!user) throw new Error("User not found");
+      console.log("3. User found:", !!user);
 
       const { data: userTopics } = await supabase
         .from("User_Topics")
@@ -66,6 +69,8 @@ export default function KnowledgeGraph() {
         .eq("user_id", user.id)
         .eq("status", "in_progress")
         .order("created_at", { ascending: false });
+
+      console.log("4. User topics:", userTopics);
 
       if (!userTopics || userTopics.length === 0) {
         throw new Error("No topics selected");
@@ -77,6 +82,8 @@ export default function KnowledgeGraph() {
         .from("Books")
         .select("*")
         .eq("topic_id", mostRecentTopic.topic_id);
+
+      console.log("5. Books found:", books?.length);
 
       if (!books) throw new Error("No books found");
 
@@ -91,6 +98,8 @@ export default function KnowledgeGraph() {
           "to_book_id",
           books.map((b) => b.google_books_id)
         );
+
+      console.log("6. Connections found:", connections?.length);
 
       if (books && connections) {
         const levelCounts = {
@@ -147,19 +156,29 @@ export default function KnowledgeGraph() {
           animated: true,
         }));
 
+        console.log("7. Created nodes:", nodes.length);
+        console.log("8. Created edges:", edges.length);
+
         setNodes(nodes);
         setEdges(edges);
       }
     } catch (error) {
-      console.error("Error fetching graph data:", error);
+      console.error("Error in fetchGraphData:", error);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    console.log("useEffect triggered");
     fetchGraphData();
   }, []);
+
+  console.log("Rendering with:", {
+    nodesLength: nodes.length,
+    edgesLength: edges.length,
+    loading,
+  });
 
   return (
     <div className="p-4 w-full min-h-screen">
