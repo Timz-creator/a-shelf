@@ -20,13 +20,30 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import BookNode from "@/app/components/graph/BookNode";
 import { nodeTypes } from "@/app/components/graph/nodeTypes";
+
+// Move isValidConnection outside of fetchGraphData
+const isValidConnection = (fromBook: any, toBook: any) => {
+  // Only allow progression from beginner -> intermediate -> advanced
+  if (fromBook.level === "beginner") {
+    return toBook.level === "intermediate";
+  }
+  if (fromBook.level === "intermediate") {
+    return toBook.level === "advanced";
+  }
+  // Don't allow advanced books to connect forward
+  // Don't allow any backwards connections
+  return false;
+};
 
 export default function KnowledgeGraph() {
   const [loading, setLoading] = useState(true);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [expandedNodes, setExpandedNodes] = useState<string[]>([]);
+  const [visibleCount, setVisibleCount] = useState(5); // Start with 5 nodes
   const supabase = createClientComponentClient();
 
   const onNodesChange = useCallback(
@@ -43,6 +60,34 @@ export default function KnowledgeGraph() {
     (params) => setEdges((eds) => addEdge(params, eds)),
     []
   );
+
+  // Add node click handler
+  const onNodeClick = useCallback((event: any, node: Node) => {
+    setExpandedNodes((prev) => {
+      const isExpanded = prev.includes(node.id);
+      return isExpanded
+        ? prev.filter((id) => id !== node.id) // Collapse
+        : [...prev, node.id]; // Expand
+    });
+  }, []);
+
+  // Update the handleShowMore function
+  const handleShowMore = useCallback(() => {
+    // Get next batch of books based on current visible count
+    setExpandedNodes((prev) => {
+      // Get next 3 nodes that aren't already shown
+      const currentlyShown = new Set(prev);
+      const nextNodes = nodes
+        .filter((node) => !currentlyShown.has(node.id))
+        .slice(0, 3)
+        .map((node) => node.id);
+
+      return [...prev, ...nextNodes];
+    });
+
+    // Update visible count based on actual shown nodes
+    setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
+  }, [nodes]);
 
   const fetchGraphData = async () => {
     try {
@@ -65,7 +110,7 @@ export default function KnowledgeGraph() {
 
       const { data: userTopics } = await supabase
         .from("User_Topics")
-        .select("topic_id")
+        .select("topic_id, status, skill_level")
         .eq("user_id", user.id)
         .eq("status", "in_progress")
         .order("created_at", { ascending: false });
@@ -102,62 +147,59 @@ export default function KnowledgeGraph() {
       console.log("6. Connections found:", connections?.length);
 
       if (books && connections) {
-        const levelCounts = {
-          beginner: 0,
-          intermediate: 0,
-          advanced: 0,
+        const visibleData = getVisibleNodes(
+          books,
+          mostRecentTopic.skill_level,
+          connections,
+          expandedNodes
+        );
+
+        // Calculate position with horizontal spacing
+        const calculatePosition = (
+          level: string,
+          index: number,
+          totalInLevel: number
+        ) => {
+          const CANVAS_WIDTH = 800; // Total width available
+          const spacing = CANVAS_WIDTH / (totalInLevel + 1); // Even spacing
+          const x = spacing * (index + 1); // Position based on index
+
+          // Vertical position based on level
+          const y =
+            level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
+
+          return { x, y };
         };
 
-        books.forEach((book) => {
-          levelCounts[book.level as keyof typeof levelCounts]++;
-        });
-
-        const spacing = {
-          beginner: 800 / (levelCounts.beginner + 1),
-          intermediate: 800 / (levelCounts.intermediate + 1),
-          advanced: 800 / (levelCounts.advanced + 1),
+        // Create nodes with positions
+        const nodesByLevel = {
+          beginner: visibleData.books.filter((b) => b.level === "beginner"),
+          intermediate: visibleData.books.filter(
+            (b) => b.level === "intermediate"
+          ),
+          advanced: visibleData.books.filter((b) => b.level === "advanced"),
         };
 
-        const currentX = {
-          beginner: 0,
-          intermediate: 0,
-          advanced: 0,
-        };
-
-        const nodes = books.map((book) => {
-          const level = book.level as keyof typeof levelCounts;
-          currentX[level] += spacing[level];
-
-          return {
+        const nodes = Object.entries(nodesByLevel).flatMap(([level, books]) =>
+          books.map((book, index) => ({
             id: book.google_books_id,
             type: "bookNode",
-            data: { label: book.title },
-            position: {
-              x: currentX[level],
-              y:
-                level === "beginner"
-                  ? 100
-                  : level === "intermediate"
-                  ? 300
-                  : 500,
+            data: {
+              label: book.title,
+              level: book.level,
             },
-            style: {
-              border: "1px solid #000",
-              borderRadius: "8px",
-              padding: "10px",
-            },
-          };
-        });
+            position: calculatePosition(level, index, books.length),
+          }))
+        );
 
-        const edges = connections.map((conn) => ({
+        // Create edges from valid connections
+        const edges = visibleData.connections.map((conn) => ({
           id: `${conn.from_book_id}-${conn.to_book_id}`,
           source: conn.from_book_id,
           target: conn.to_book_id,
           animated: true,
+          type: "bezier",
         }));
-
-        console.log("7. Created nodes:", nodes.length);
-        console.log("8. Created edges:", edges.length);
 
         setNodes(nodes);
         setEdges(edges);
@@ -169,10 +211,11 @@ export default function KnowledgeGraph() {
     }
   };
 
+  // Update useEffect to run when expandedNodes changes
   useEffect(() => {
-    console.log("useEffect triggered");
+    console.log("Fetching graph data. Expanded nodes:", expandedNodes);
     fetchGraphData();
-  }, []);
+  }, [expandedNodes]); // Add expandedNodes to dependencies
 
   console.log("Rendering with:", {
     nodesLength: nodes.length,
@@ -180,12 +223,143 @@ export default function KnowledgeGraph() {
     loading,
   });
 
+  // Update filterInitialNodes to handle progressive reveal
+  const filterInitialNodes = (
+    books: any[],
+    userLevel: string,
+    connections: any[],
+    showCount: number = 5
+  ) => {
+    // Group books by level
+    const booksByLevel = {
+      beginner: books.filter((b) => b.level === "beginner"),
+      intermediate: books.filter((b) => b.level === "intermediate"),
+      advanced: books.filter((b) => b.level === "advanced"),
+    };
+
+    // Get initial set based on user level
+    const initialSet = (() => {
+      switch (userLevel) {
+        case "beginner":
+          return {
+            beginner: 2, // Show 2 beginner books
+            intermediate: 1, // Preview 1 intermediate
+            advanced: 0,
+          };
+        case "intermediate":
+          return {
+            beginner: 2, // Show 2 prereqs
+            intermediate: 2, // Show 2 current level
+            advanced: 1, // Preview 1 advanced
+          };
+        case "advanced":
+          return {
+            beginner: 0,
+            intermediate: 2, // Show 2 prereqs
+            advanced: 2, // Show 2 advanced
+          };
+        default:
+          return { beginner: 0, intermediate: 0, advanced: 0 };
+      }
+    })();
+
+    // Get initial books
+    let selectedBooks = [
+      ...booksByLevel.beginner.slice(0, initialSet.beginner),
+      ...booksByLevel.intermediate.slice(0, initialSet.intermediate),
+      ...booksByLevel.advanced.slice(0, initialSet.advanced),
+    ];
+
+    // Add more books if showCount is higher
+    if (showCount > selectedBooks.length) {
+      const remainingCount = showCount - selectedBooks.length;
+      const selectedIds = new Set(selectedBooks.map((b) => b.google_books_id));
+
+      // Add books in level order
+      const additionalBooks = books
+        .filter((b) => !selectedIds.has(b.google_books_id))
+        .slice(0, remainingCount);
+
+      selectedBooks = [...selectedBooks, ...additionalBooks];
+    }
+
+    return selectedBooks;
+  };
+
+  // Update getVisibleNodes to handle connections
+  const getVisibleNodes = (
+    books: any[],
+    userLevel: string,
+    connections: any[],
+    expandedNodeIds: string[]
+  ) => {
+    console.log("getVisibleNodes input:", {
+      totalBooks: books.length,
+      userLevel,
+      totalConnections: connections.length,
+      expandedNodeIds,
+    });
+
+    const visibleBooks = filterInitialNodes(
+      books,
+      userLevel,
+      connections,
+      expandedNodeIds.length + 3
+    );
+
+    console.log("After filterInitialNodes:", {
+      visibleBooks: visibleBooks.length,
+      bookLevels: visibleBooks.map((b) => b.level),
+    });
+
+    const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
+    const validConnections = connections.filter((conn) => {
+      const isVisible =
+        visibleBookIds.includes(conn.from_book_id) &&
+        visibleBookIds.includes(conn.to_book_id);
+
+      if (!isVisible) return false;
+
+      const fromBook = books.find(
+        (b) => b.google_books_id === conn.from_book_id
+      );
+      const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
+
+      const isValid = isValidConnection(fromBook, toBook);
+      return isValid;
+    });
+
+    console.log("Final output:", {
+      visibleBooks: visibleBooks.length,
+      validConnections: validConnections.length,
+    });
+
+    return {
+      books: visibleBooks,
+      connections: validConnections,
+    };
+  };
+
   return (
     <div className="p-4 w-full min-h-screen">
       <Card className="w-full h-[800px]">
         <CardHeader>
-          <CardTitle>Knowledge Graph</CardTitle>
-          <CardDescription>Visualizing topic relationships</CardDescription>
+          <div className="flex justify-between items-center">
+            <div>
+              <CardTitle>Knowledge Graph</CardTitle>
+              <CardDescription>
+                Showing {Math.min(visibleCount, nodes.length)} of {nodes.length}{" "}
+                books
+              </CardDescription>
+            </div>
+            <Button
+              onClick={handleShowMore}
+              className="bg-blue-500 text-white"
+              disabled={expandedNodes.length >= nodes.length}
+            >
+              Show More
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="h-[calc(100%-100px)] p-0">
           {loading ? (
