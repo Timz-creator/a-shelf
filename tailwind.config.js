@@ -1,3 +1,4 @@
+/** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
     "'./pages/**/*.{js,ts,jsx,tsx,mdx}'",
@@ -12,8 +13,19 @@ module.exports = {
         "'apple-secondary'": "'#86868b'",
         "'apple-green'": "'#06c149'",
       },
+      fontFamily: {
+        sans: [
+          "Inter",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI",
+          "Roboto",
+          "Helvetica",
+          "Arial",
+          "sans-serif",
+        ],
+      },
     },
   },
   plugins: [],
-}
-
+};

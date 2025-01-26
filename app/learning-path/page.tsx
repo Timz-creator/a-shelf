@@ -21,7 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import BookNode from "@/app/components/graph/BookNode";
+import { BookSidebar } from "@/app/components/graph/BookSidebar";
 import { nodeTypes } from "@/app/components/graph/nodeTypes";
 
 // Move isValidConnection outside of fetchGraphData
@@ -44,6 +44,7 @@ export default function KnowledgeGraph() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [expandedNodes, setExpandedNodes] = useState<string[]>([]);
   const [visibleCount, setVisibleCount] = useState(5); // Start with 5 nodes
+  const [selectedBook, setSelectedBook] = useState<BookNodeData | null>(null); // Track selected book
   const supabase = createClientComponentClient();
 
   const onNodesChange = useCallback(
@@ -180,17 +181,39 @@ export default function KnowledgeGraph() {
           advanced: visibleData.books.filter((b) => b.level === "advanced"),
         };
 
-        const nodes = Object.entries(nodesByLevel).flatMap(([level, books]) =>
-          books.map((book, index) => ({
-            id: book.google_books_id,
-            type: "bookNode",
-            data: {
-              label: book.title,
-              level: book.level,
-            },
-            position: calculatePosition(level, index, books.length),
-          }))
-        );
+        // Before node creation
+        console.log("Creating nodes with books:", books);
+
+        const nodes = Object.entries(nodesByLevel).flatMap(([level, books]) => {
+          console.log(`Creating ${level} nodes:`, books);
+
+          return books.map((book, index) => {
+            const nodeData = {
+              id: book.google_books_id,
+              type: "bookNode",
+              data: {
+                id: book.google_books_id,
+                label: book.title,
+                level: book.level as "beginner" | "intermediate" | "advanced",
+                status: book.status || "not_started",
+                isAdvanced: book.level === "advanced",
+                description: book.description,
+                onClick: () =>
+                  setSelectedBook({
+                    id: book.google_books_id,
+                    title: book.title,
+                    description: book.description,
+                    isAdvanced: book.level === "advanced",
+                    status: book.status || "not_started",
+                  }),
+              },
+              position: calculatePosition(level, index, books.length),
+            };
+
+            console.log("Node data:", nodeData);
+            return nodeData;
+          });
+        });
 
         // Create edges from valid connections
         const edges = visibleData.connections.map((conn) => ({
@@ -346,15 +369,15 @@ export default function KnowledgeGraph() {
         <CardHeader>
           <div className="flex justify-between items-center">
             <div>
-              <CardTitle>Knowledge Graph</CardTitle>
-              <CardDescription>
+              <CardTitle className="font-semibold">Knowledge Graph</CardTitle>
+              <CardDescription className="font-medium">
                 Showing {Math.min(visibleCount, nodes.length)} of {nodes.length}{" "}
                 books
               </CardDescription>
             </div>
             <Button
               onClick={handleShowMore}
-              className="bg-blue-500 text-white"
+              className="bg-black text-white font-medium"
               disabled={expandedNodes.length >= nodes.length}
             >
               Show More
@@ -383,6 +406,40 @@ export default function KnowledgeGraph() {
           )}
         </CardContent>
       </Card>
+
+      {/* Add BookSidebar */}
+      <BookSidebar
+        book={selectedBook}
+        onClose={() => setSelectedBook(null)}
+        onStatusChange={(id, status) => {
+          console.log("Status update triggered:", { id, status });
+          console.log("All nodes:", nodes);
+
+          setNodes((prevNodes) => {
+            const newNodes = prevNodes.map((node) => {
+              console.log("Checking node:", node.id, "against:", id);
+              if (node.id === id) {
+                console.log("Updating node:", node.id);
+                console.log("Before update:", node.data);
+
+                const updatedNode = {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    status,
+                  },
+                };
+
+                console.log("After update:", updatedNode.data);
+                return updatedNode;
+              }
+              return node;
+            });
+
+            return newNodes;
+          });
+        }}
+      />
     </div>
   );
 }
