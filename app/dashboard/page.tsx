@@ -6,6 +6,7 @@ import { TopicDialog } from "/Users/timarleyfoster/Desktop/a-shelf/app/component
 import { SearchTopics } from "/Users/timarleyfoster/Desktop/a-shelf/app/components/homescreen/search-topics";
 import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
 import { cookies } from "next/headers";
+import { LearningPathsSection } from "@/app/components/homescreen/LearningPathsSection";
 
 export const metadata: Metadata = {
   title: "'Dashboard | BookMaster'",
@@ -15,6 +16,22 @@ export const metadata: Metadata = {
 export default async function DashboardPage() {
   const supabase = createServerComponentClient({ cookies });
 
+  // Get current user's topics
+  const { data: userTopics } = await supabase
+    .from("User_Topics")
+    .select(
+      `
+      topic_id,
+      skill_level,
+      Topics (
+        title,
+        icon
+      )
+    `
+    )
+    .eq("status", "in_progress");
+
+  // Existing topics query for the topic selection section
   const { data: topics, error } = await supabase
     .from("Topics")
     .select("*")
@@ -74,28 +91,8 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      {/* Your Learning Paths Section */}
-      <section className="px-4 py-12 bg-gray-50">
-        <div className="container mx-auto max-w-6xl">
-          <h2 className="text-2xl font-bold mb-6">Your Learning Paths</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {[1, 2, 3].map((_, index) => (
-              <div
-                key={index}
-                className="bg-white rounded-2xl p-6 shadow-sm flex flex-col items-center justify-center h-48"
-              >
-                <PlusCircle className="h-12 w-12 text-gray-300 mb-4" />
-                <p className="text-gray-500 text-center">
-                  Start a new learning path
-                </p>
-                <Button variant="ghost" className="mt-4" asChild>
-                  <Link href="#topicSection">Choose a Topic</Link>
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      {/* Replace the Learning Paths section with the new component */}
+      <LearningPathsSection userTopics={userTopics} />
 
       {/* Topic Selection Screen */}
       <section id="topicSection" className="px-4 py-12 bg-white">
