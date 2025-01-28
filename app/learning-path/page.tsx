@@ -26,6 +26,7 @@ import { nodeTypes } from "@/app/components/graph/nodeTypes";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
+import debounce from "lodash/debounce";
 
 // Move isValidConnection outside of fetchGraphData
 const isValidConnection = (fromBook: any, toBook: any) => {
@@ -46,9 +47,17 @@ export default function KnowledgeGraph() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [user, setUser] = useState<any>(null);
+  const [currentTopic, setCurrentTopic] = useState<{
+    topic_id: string;
+    skill_level: string;
+    status: string;
+  } | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<string[]>([]);
   const [visibleCount, setVisibleCount] = useState(5); // Start with 5 nodes
   const [selectedBook, setSelectedBook] = useState<BookNodeData | null>(null); // Track selected book
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">(
+    "saved"
+  );
   const supabase = createClientComponentClient();
 
   // Get user on mount
@@ -62,48 +71,110 @@ export default function KnowledgeGraph() {
     getUser();
   }, [supabase]);
 
+  // Optimistically save graph layout with debouncing
+  const saveGraphLayout = useCallback(
+    debounce(async () => {
+      try {
+        setSaveStatus("saving");
+        // Optimistically show saving state
+        toast({ description: "Saving graph layout..." });
+
+        // Prepare layout data
+        const layout = {
+          nodes: nodes.map((n) => ({
+            id: n.id,
+            position: n.position,
+          })),
+          edges: edges.map((e) => ({
+            id: e.id,
+            source: e.source,
+            target: e.target,
+          })),
+          expandedNodes,
+          visibleCount,
+          lastSaved: new Date().toISOString(),
+        };
+
+        // Send to API
+        const response = await fetch("/api/graph-layout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            topicId: currentTopic?.topic_id,
+            graphLayout: layout,
+          }),
+        });
+
+        if (!response.ok) throw new Error("Failed to save layout");
+
+        setSaveStatus("saved");
+        toast({ description: "Graph layout saved" });
+      } catch (error) {
+        setSaveStatus("error");
+        toast({
+          description:
+            "Failed to save layout. Changes will be lost on refresh.",
+          variant: "destructive",
+        });
+      }
+    }, 1000), // Debounce for 1 second
+    [nodes, edges, expandedNodes, visibleCount, currentTopic]
+  );
+
+  // Update existing callbacks to save layout
   const onNodesChange = useCallback(
-    (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
-    []
+    (changes) => {
+      setNodes((nds) => applyNodeChanges(changes, nds));
+      saveGraphLayout(); // Save when nodes move
+    },
+    [saveGraphLayout]
   );
 
   const onEdgesChange = useCallback(
-    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
-    []
+    (changes) => {
+      setEdges((eds) => applyEdgeChanges(changes, eds));
+      saveGraphLayout(); // Save when edges change
+    },
+    [saveGraphLayout]
   );
 
   const onConnect = useCallback(
-    (params) => setEdges((eds) => addEdge(params, eds)),
-    []
+    (params) => {
+      setEdges((eds) => addEdge(params, eds));
+      saveGraphLayout(); // Save when new connections are made
+    },
+    [saveGraphLayout]
   );
 
   // Add node click handler
-  const onNodeClick = useCallback((event: any, node: Node) => {
-    setExpandedNodes((prev) => {
-      const isExpanded = prev.includes(node.id);
-      return isExpanded
-        ? prev.filter((id) => id !== node.id) // Collapse
-        : [...prev, node.id]; // Expand
-    });
-  }, []);
+  const onNodeClick = useCallback(
+    (event: any, node: Node) => {
+      setExpandedNodes((prev) => {
+        const isExpanded = prev.includes(node.id);
+        const newExpanded = isExpanded
+          ? prev.filter((id) => id !== node.id)
+          : [...prev, node.id];
+        saveGraphLayout(); // Save when nodes expand/collapse
+        return newExpanded;
+      });
+    },
+    [saveGraphLayout]
+  );
 
   // Update the handleShowMore function
   const handleShowMore = useCallback(() => {
-    // Get next batch of books based on current visible count
     setExpandedNodes((prev) => {
-      // Get next 3 nodes that aren't already shown
       const currentlyShown = new Set(prev);
       const nextNodes = nodes
         .filter((node) => !currentlyShown.has(node.id))
         .slice(0, 3)
         .map((node) => node.id);
-
-      return [...prev, ...nextNodes];
+      const newExpanded = [...prev, ...nextNodes];
+      saveGraphLayout(); // Save when more nodes are shown
+      return newExpanded;
     });
-
-    // Update visible count based on actual shown nodes
     setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
-  }, [nodes]);
+  }, [nodes, saveGraphLayout]);
 
   const fetchGraphData = async () => {
     try {
@@ -138,6 +209,7 @@ export default function KnowledgeGraph() {
       }
 
       const mostRecentTopic = userTopics[0];
+      setCurrentTopic(mostRecentTopic);
 
       const { data: books } = await supabase
         .from("Books")
