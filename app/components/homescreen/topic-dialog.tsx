@@ -28,30 +28,24 @@ type TopicDialogProps = {
 };
 
 export function TopicDialog({ topic }: TopicDialogProps) {
+  const [open, setOpen] = useState(false);
   const [skillLevel, setSkillLevel] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
-  const supabase = createClientComponentClient();
   const router = useRouter();
+  const supabase = createClientComponentClient();
 
   const handleStartLearning = async () => {
     try {
       setLoading(true);
-      console.log("Starting analysis with topic:", {
-        topic,
-        topicId: topic.id,
-        skillLevel,
-      });
 
-      // Get current user
       const {
         data: { user },
-        error: userError,
       } = await supabase.auth.getUser();
-      if (userError) throw userError;
+      if (!user) throw new Error("Not authenticated");
 
-      // Save to user_topics
+      // First create/update the user topic
       const { error: topicError } = await supabase.from("User_Topics").insert({
-        user_id: user?.id,
+        user_id: user.id,
         topic_id: topic.id,
         skill_level: skillLevel,
         status: "in_progress",
@@ -59,20 +53,11 @@ export function TopicDialog({ topic }: TopicDialogProps) {
 
       if (topicError) throw topicError;
 
-      // Fetch books for topic
+      // Continue with book analysis
       const response = await fetch(
         `/api/books?topic=${encodeURIComponent(topic.title)}`
       );
       const books = await response.json();
-
-      // Before analyze-books fetch:
-      console.log("Sending to analyze-books:", {
-        books: books.items.length,
-        topic: {
-          id: topic.id,
-          title: topic.title,
-        },
-      });
 
       // Send books for analysis
       const analysisResponse = await fetch("/api/analyze-books", {
@@ -89,10 +74,9 @@ export function TopicDialog({ topic }: TopicDialogProps) {
         }),
       });
 
-      const analysis = await analysisResponse.json();
-      console.log("Books analysis:", analysis);
+      await analysisResponse.json();
 
-      // Navigate to learning path
+      // Navigate to initial learning path
       router.push("/learning-path");
     } catch (error) {
       console.error("Error:", error);

@@ -23,6 +23,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { BookSidebar } from "@/app/components/graph/BookSidebar";
 import { nodeTypes } from "@/app/components/graph/nodeTypes";
+import { ArrowLeft } from "lucide-react";
+import Link from "next/link";
+import { toast } from "@/hooks/use-toast";
 
 // Move isValidConnection outside of fetchGraphData
 const isValidConnection = (fromBook: any, toBook: any) => {
@@ -42,10 +45,22 @@ export default function KnowledgeGraph() {
   const [loading, setLoading] = useState(true);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [user, setUser] = useState<any>(null);
   const [expandedNodes, setExpandedNodes] = useState<string[]>([]);
   const [visibleCount, setVisibleCount] = useState(5); // Start with 5 nodes
   const [selectedBook, setSelectedBook] = useState<BookNodeData | null>(null); // Track selected book
   const supabase = createClientComponentClient();
+
+  // Get user on mount
+  useEffect(() => {
+    const getUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      setUser(user);
+    };
+    getUser();
+  }, [supabase]);
 
   const onNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -365,6 +380,19 @@ export default function KnowledgeGraph() {
 
   return (
     <div className="p-4 w-full min-h-screen">
+      <Button
+        variant="ghost"
+        className="mb-6 px-0 hover:bg-transparent"
+        asChild
+      >
+        <Link
+          href="/dashboard"
+          className="inline-flex items-center text-gray-600 hover:text-black"
+        >
+          <ArrowLeft className="mr-2 h-5 w-5" />
+          Back to Dashboard
+        </Link>
+      </Button>
       <Card className="w-full h-[800px]">
         <CardHeader>
           <div className="flex justify-between items-center">
@@ -421,6 +449,29 @@ export default function KnowledgeGraph() {
               if (node.id === id) {
                 console.log("Updating node:", node.id);
                 console.log("Before update:", node.data);
+
+                // Update the book status in Supabase
+                supabase
+                  .from("User_Progress")
+                  .upsert(
+                    {
+                      user_id: user?.id,
+                      book_id: id,
+                      status: status,
+                    },
+                    {
+                      onConflict: "user_id,book_id",
+                    }
+                  )
+                  .then(({ error }) => {
+                    if (error) {
+                      console.error("Error updating book status:", error);
+                      toast({
+                        description: "Failed to update book status",
+                        variant: "destructive",
+                      });
+                    }
+                  });
 
                 const updatedNode = {
                   ...node,
