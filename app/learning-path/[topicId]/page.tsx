@@ -36,6 +36,21 @@ interface PageProps {
   };
 }
 
+interface CustomNode extends Node {
+  sourceConnections?: string[];
+  targetConnections?: string[];
+  data: {
+    id: string;
+    label: string;
+    level: string;
+    status: string;
+    description: string;
+    isAdvanced?: boolean;
+    initiallyVisible?: boolean;
+    onClick?: () => void;
+  };
+}
+
 const isValidConnection = (fromBook: any, toBook: any) => {
   if (fromBook.level === "beginner") {
     return toBook.level === "intermediate";
@@ -149,12 +164,14 @@ const calculatePosition = (
 
 export default function KnowledgeGraph({ params }: PageProps) {
   const { topicId } = params;
+  console.log("KnowledgeGraph mounted with topicId:", topicId);
   const [loading, setLoading] = useState(true);
-  const [nodes, setNodes] = useState<Node[]>([]);
+  const [nodes, setNodes] = useState<CustomNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [expandedNodes, setExpandedNodes] = useState<string[]>([]);
   const [visibleCount, setVisibleCount] = useState(5);
   const [selectedBook, setSelectedBook] = useState<BookNodeData | null>(null);
+  const [allBooksLoaded, setAllBooksLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">(
     "saved"
   );
@@ -166,27 +183,72 @@ export default function KnowledgeGraph({ params }: PageProps) {
     debounce(async () => {
       try {
         setSaveStatus("saving");
+        console.log("Preparing to save layout:", {
+          nodeCount: nodes.length,
+          edgeCount: edges.length,
+          expandedNodes,
+          visibleCount,
+        });
+
         const layout = {
-          nodes: nodes.map((n) => ({
-            id: n.id,
-            position: n.position,
+          nodes: nodes.map((node) => ({
+            id: node.id,
+            type: "bookNode",
+            position: node.position,
+            data: {
+              id: node.id,
+              label: node.data.label,
+              level: node.data.level,
+              status: node.data.status,
+              description: node.data.description,
+              isAdvanced: node.data.level === "advanced",
+              initiallyVisible: nodes.indexOf(node) < 3,
+            },
           })),
+          edges: Array.from(new Set(edges.map((e) => JSON.stringify(e))))
+            .map((e) => JSON.parse(e))
+            .map((edge) => ({
+              id: edge.id,
+              source: edge.source,
+              target: edge.target,
+              type: "bezier",
+              animated: true,
+              sourceLevel: nodes.find((n) => n.id === edge.source)?.data.level,
+              targetLevel: nodes.find((n) => n.id === edge.target)?.data.level,
+            })),
           expandedNodes,
           visibleCount,
           lastSaved: new Date().toISOString(),
         };
 
-        const response = await fetch("/api/graph-layout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topicId, graphLayout: layout }),
+        console.log("Saving layout to Supabase:", {
+          topic_id: topicId,
+          layout: {
+            nodes: layout.nodes.length,
+            edges: layout.edges.length,
+            sample_edge: layout.edges[0],
+            sample_node: layout.nodes[0],
+          },
         });
 
-        if (!response.ok) throw new Error("Failed to save layout");
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) throw new Error("No authenticated user");
+
+        await supabase.from("User_Graph").upsert(
+          {
+            user_id: user.id,
+            topic_id: topicId,
+            graph_layout: layout,
+          },
+          { onConflict: "user_id,topic_id" }
+        );
+
         setSaveStatus("saved");
         toast({ description: "Graph layout saved" });
       } catch (error) {
-        console.error("Error saving layout:", error);
+        console.error("Save error details:", error);
         setSaveStatus("error");
         toast({
           description: "Failed to save graph layout",
@@ -194,10 +256,205 @@ export default function KnowledgeGraph({ params }: PageProps) {
         });
       }
     }, 1000),
-    [nodes, expandedNodes, visibleCount, topicId]
+    [nodes, edges, expandedNodes, visibleCount, topicId]
   );
 
-  // Keep all existing callbacks
+  const fetchGraphData = useCallback(async () => {
+    try {
+      setLoading(true);
+      console.log("Fetching graph data for topicId:", topicId);
+
+      // 1. Try to get saved layout
+      const { data: savedLayout } = await supabase
+        .from("User_Graph")
+        .select("graph_layout")
+        .eq("topic_id", topicId)
+        .single();
+
+      console.log("Saved layout found:", !!savedLayout?.graph_layout);
+
+      if (savedLayout?.graph_layout) {
+        const restoredNodes = savedLayout.graph_layout.nodes.map((node) => ({
+          ...node,
+          type: "bookNode",
+          data: {
+            ...node.data,
+            level: node.data.level,
+            status: node.data.status,
+            isAdvanced: node.data.level === "advanced",
+            onClick: () =>
+              setSelectedBook({
+                id: node.data.id,
+                title: node.data.label,
+                description: node.data.description,
+                status: node.data.status || "not_started",
+              }),
+          },
+          hidden:
+            !node.data.initiallyVisible &&
+            !savedLayout.graph_layout.expandedNodes.includes(node.id),
+        }));
+
+        const restoredEdges = savedLayout.graph_layout.edges
+          .filter(
+            (edge, index, self) =>
+              index ===
+              self.findIndex(
+                (e) => e.source === edge.source && e.target === edge.target
+              )
+          )
+          .map((edge) => ({
+            ...edge,
+            type: "bezier",
+            animated: true,
+            hidden: restoredNodes.some(
+              (n) => (n.id === edge.source || n.id === edge.target) && n.hidden
+            ),
+          }));
+
+        setNodes(restoredNodes);
+        setEdges(restoredEdges);
+        setExpandedNodes(savedLayout.graph_layout.expandedNodes);
+        setVisibleCount(savedLayout.graph_layout.visibleCount);
+        return;
+      }
+
+      // 2. If no saved layout, fetch initial data
+      const { data: books } = await supabase
+        .from("Books")
+        .select("*")
+        .eq("topic_id", topicId)
+        .limit(visibleCount);
+
+      if (!books?.length) {
+        toast({
+          description: "No books found for this topic",
+          variant: "destructive",
+        });
+        router.push("/dashboard");
+        return;
+      }
+
+      // Generate initial layout
+      const initialNodes = books.map((book, index) => ({
+        id: book.google_books_id,
+        type: "bookNode",
+        position: { x: index * 200, y: 100 },
+        data: {
+          id: book.google_books_id,
+          label: book.title,
+          level: book.level,
+          status: book.status || "not_started",
+          description: book.description,
+          onClick: () =>
+            setSelectedBook({
+              id: book.google_books_id,
+              title: book.title,
+              description: book.description,
+              status: book.status || "not_started",
+            }),
+        },
+      }));
+
+      setNodes(initialNodes);
+      setAllBooksLoaded(books.length < visibleCount);
+    } catch (error) {
+      console.error("Error in fetchGraphData:", error);
+      toast({
+        description: "Error loading graph",
+        variant: "destructive",
+      });
+      router.push("/dashboard");
+    } finally {
+      setLoading(false);
+    }
+  }, [topicId, visibleCount]);
+
+  const handleShowMore = useCallback(async () => {
+    try {
+      if (allBooksLoaded) {
+        // Just update visibility of existing nodes
+        setExpandedNodes((prev) => {
+          const currentIds = new Set(prev);
+          const newIds = nodes
+            .filter((node) => !currentIds.has(node.id))
+            .slice(0, 3)
+            .map((node) => node.id);
+          return [...prev, ...newIds];
+        });
+        setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
+        saveGraphLayout();
+        return;
+      }
+
+      // Fetch more books
+      const { data: newBooks } = await supabase
+        .from("Books")
+        .select("*")
+        .eq("topic_id", topicId)
+        .range(visibleCount, visibleCount + 2);
+
+      if (newBooks?.length) {
+        const newNodes = newBooks.map((book, index) => ({
+          id: book.google_books_id,
+          type: "bookNode",
+          position: { x: (nodes.length + index) * 200, y: 100 },
+          data: {
+            id: book.google_books_id,
+            label: book.title,
+            level: book.level,
+            status: book.status || "not_started",
+            description: book.description,
+            isAdvanced: book.level === "advanced",
+            initiallyVisible: false,
+            onClick: () =>
+              setSelectedBook({
+                id: book.google_books_id,
+                title: book.title,
+                description: book.description,
+                status: book.status || "not_started",
+              }),
+          },
+          sourceConnections: nodes
+            .filter((n) => isValidConnection(book, n.data))
+            .map((n) => n.id),
+          targetConnections: nodes
+            .filter((n) => isValidConnection(n.data, book))
+            .map((n) => n.id),
+        }));
+
+        const newEdges = newNodes.flatMap((node) =>
+          [...node.sourceConnections, ...node.targetConnections].map(
+            (connectedId) => ({
+              id: `${node.id}-${connectedId}`,
+              source: node.id,
+              target: connectedId,
+              type: "bezier",
+              animated: true,
+              sourceLevel: node.data.level,
+              targetLevel: nodes.find((n) => n.id === connectedId)?.data.level,
+            })
+          )
+        );
+
+        setNodes((prev) => [...prev, ...newNodes]);
+        setEdges((prev) => [...prev, ...newEdges]);
+        setVisibleCount((prev) => prev + newBooks.length);
+        setAllBooksLoaded(newBooks.length < 3);
+        saveGraphLayout();
+      }
+    } catch (error) {
+      toast({
+        description: "Error loading more books",
+        variant: "destructive",
+      });
+    }
+  }, [nodes, visibleCount, allBooksLoaded, topicId]);
+
+  useEffect(() => {
+    fetchGraphData();
+  }, [fetchGraphData]);
+
   const onNodesChange = useCallback(
     (changes) => {
       setNodes((nds) => applyNodeChanges(changes, nds));
@@ -207,8 +464,11 @@ export default function KnowledgeGraph({ params }: PageProps) {
   );
 
   const onEdgesChange = useCallback(
-    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
-    []
+    (changes) => {
+      setEdges((eds) => applyEdgeChanges(changes, eds));
+      saveGraphLayout();
+    },
+    [saveGraphLayout]
   );
 
   const onConnect = useCallback(
@@ -229,157 +489,6 @@ export default function KnowledgeGraph({ params }: PageProps) {
     },
     [saveGraphLayout]
   );
-
-  const handleShowMore = useCallback(() => {
-    setExpandedNodes((prev) => {
-      const currentlyShown = new Set(prev);
-      const nextNodes = nodes
-        .filter((node) => !currentlyShown.has(node.id))
-        .slice(0, 3)
-        .map((node) => node.id);
-      const newExpanded = [...prev, ...nextNodes];
-      saveGraphLayout();
-      return newExpanded;
-    });
-    setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
-  }, [nodes, saveGraphLayout]);
-
-  const fetchGraphData = useCallback(async () => {
-    try {
-      setLoading(true);
-      console.log("1. Starting fetchGraphData");
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      // 1. Get user topic and books
-      const { data: userTopic, error: topicError } = await supabase
-        .from("User_Topics")
-        .select("topic_id, status, skill_level")
-        .eq("topic_id", topicId)
-        .eq("user_id", user.id)
-        .single();
-
-      if (topicError) {
-        console.error("Topic error:", topicError);
-        throw topicError;
-      }
-
-      if (!userTopic) {
-        router.push("/dashboard");
-        toast({
-          description: "Topic not found. Please try again.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // 2. Get books and connections
-      const { data: books } = await supabase
-        .from("Books")
-        .select("*")
-        .eq("topic_id", topicId);
-
-      if (!books?.length) {
-        toast({
-          description: "No books found for this topic. Please try again later.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      const { data: connections } = await supabase
-        .from("Skill_Map")
-        .select("*")
-        .in(
-          "from_book_id",
-          books.map((b) => b.google_books_id)
-        )
-        .in(
-          "to_book_id",
-          books.map((b) => b.google_books_id)
-        );
-
-      // 3. Try to get saved layout
-      const { data: savedLayout } = await supabase
-        .from("User_Graph")
-        .select("layout")
-        .eq("user_id", user.id)
-        .eq("topic_id", topicId)
-        .single();
-
-      // 4. Generate graph data
-      const visibleData = getVisibleNodes(
-        books,
-        userTopic.skill_level,
-        connections || [],
-        expandedNodes
-      );
-
-      // 5. Create nodes with either saved or default positions
-      const nodes = visibleData.books.map((book, index) => {
-        const savedNode = savedLayout?.layout?.nodes?.find(
-          (n: any) => n.id === book.google_books_id
-        );
-
-        const position =
-          savedNode?.position ||
-          calculatePosition(
-            book.level,
-            index,
-            visibleData.books.filter((b) => b.level === book.level).length
-          );
-
-        return {
-          id: book.google_books_id,
-          type: "bookNode",
-          position,
-          data: {
-            id: book.google_books_id,
-            label: book.title,
-            level: book.level,
-            status: book.status || "not_started",
-            isAdvanced: book.level === "advanced",
-            description: book.description,
-            onClick: () =>
-              setSelectedBook({
-                id: book.google_books_id,
-                title: book.title,
-                description: book.description,
-                isAdvanced: book.level === "advanced",
-                status: book.status || "not_started",
-              }),
-          },
-        };
-      });
-
-      const edges = visibleData.connections.map((conn) => ({
-        id: `${conn.from_book_id}-${conn.to_book_id}`,
-        source: conn.from_book_id,
-        target: conn.to_book_id,
-        animated: true,
-        type: "bezier",
-      }));
-
-      setNodes(nodes);
-      setEdges(edges);
-    } catch (error) {
-      console.error("Error in fetchGraphData:", error);
-      toast({
-        description: "Error loading graph. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [expandedNodes, topicId, supabase, router]);
-
-  useEffect(() => {
-    console.log("Fetching graph data. Expanded nodes:", expandedNodes);
-    fetchGraphData();
-  }, [expandedNodes, fetchGraphData]);
 
   return (
     <div className="p-4 w-full min-h-screen">

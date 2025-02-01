@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ArrowRight, PlusCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -5,13 +6,16 @@ interface ActiveLearningPathProps {
   icon: string;
   title: string;
   level: string;
+  topicId: string;
 }
 
 export function ActiveLearningPathCard({
   icon,
   title,
   level,
+  topicId,
 }: ActiveLearningPathProps) {
+  console.log("ActiveLearningPathCard topicId:", topicId);
   return (
     <div className="bg-white rounded-2xl p-6 shadow-sm transition-all duration-300 ease-in-out hover:shadow-md hover:scale-[1.02]">
       <div className="flex items-center mb-4">
@@ -21,9 +25,11 @@ export function ActiveLearningPathCard({
           <p className="text-sm text-gray-500">{level}</p>
         </div>
       </div>
-      <Button className="w-full">
-        Continue Learning
-        <ArrowRight className="ml-2 h-5 w-5" />
+      <Button className="w-full" asChild>
+        <Link href={`/learning-path/${topicId}`}>
+          Continue Learning
+          <ArrowRight className="ml-2 h-5 w-5" />
+        </Link>
       </Button>
     </div>
   );

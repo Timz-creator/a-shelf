@@ -31,6 +31,11 @@ export default async function DashboardPage() {
     )
     .eq("status", "in_progress");
 
+  console.log(
+    "User Topics from dashboard:",
+    JSON.stringify(userTopics, null, 2)
+  );
+
   // Existing topics query for the topic selection section
   const { data: topics, error } = await supabase
     .from("Topics")

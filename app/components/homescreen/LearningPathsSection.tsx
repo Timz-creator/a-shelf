@@ -40,6 +40,7 @@ export function LearningPathsSection({
                   icon={topic.Topics.icon}
                   title={topic.Topics.title}
                   level={topic.skill_level}
+                  topicId={topic.topic_id}
                 />
               ))}
               {userTopics.length < 3 && (

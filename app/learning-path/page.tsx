@@ -27,6 +27,7 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 import debounce from "lodash/debounce";
+import { useRouter } from "next/navigation";
 
 // Move isValidConnection outside of fetchGraphData
 const isValidConnection = (fromBook: any, toBook: any) => {
@@ -42,9 +43,24 @@ const isValidConnection = (fromBook: any, toBook: any) => {
   return false;
 };
 
+interface CustomNode extends Node {
+  sourceConnections?: string[];
+  targetConnections?: string[];
+  data: {
+    id: string;
+    label: string;
+    level: string;
+    status: string;
+    description: string;
+    isAdvanced?: boolean;
+    initiallyVisible?: boolean;
+    onClick?: () => void;
+  };
+}
+
 export default function KnowledgeGraph() {
   const [loading, setLoading] = useState(true);
-  const [nodes, setNodes] = useState<Node[]>([]);
+  const [nodes, setNodes] = useState<CustomNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [user, setUser] = useState<any>(null);
   const [currentTopic, setCurrentTopic] = useState<{
@@ -76,49 +92,84 @@ export default function KnowledgeGraph() {
     debounce(async () => {
       try {
         setSaveStatus("saving");
-        // Optimistically show saving state
-        toast({ description: "Saving graph layout..." });
 
-        // Prepare layout data
+        // Validate required fields
+        if (!user?.id || !currentTopic?.topic_id) {
+          console.error("Missing required fields:", {
+            user_id: user?.id,
+            topic_id: currentTopic?.topic_id,
+          });
+          setSaveStatus("error");
+          return;
+        }
+
+        // Prepare layout
         const layout = {
-          nodes: nodes.map((n) => ({
-            id: n.id,
-            position: n.position,
+          nodes: nodes.map((node) => ({
+            id: node.id,
+            type: "bookNode",
+            position: node.position,
+            data: {
+              id: node.id,
+              label: node.data.label,
+              level: node.data.level,
+              status: node.data.status,
+              description: node.data.description,
+              isAdvanced: node.data.level === "advanced",
+              initiallyVisible: nodes.indexOf(node) < 3,
+            },
           })),
-          edges: edges.map((e) => ({
-            id: e.id,
-            source: e.source,
-            target: e.target,
-          })),
+          edges: Array.from(new Set(edges.map((e) => JSON.stringify(e))))
+            .map((e) => JSON.parse(e))
+            .map((edge) => ({
+              id: edge.id,
+              source: edge.source,
+              target: edge.target,
+              type: "bezier",
+              animated: true,
+              sourceLevel: nodes.find((n) => n.id === edge.source)?.data.level,
+              targetLevel: nodes.find((n) => n.id === edge.target)?.data.level,
+            })),
           expandedNodes,
           visibleCount,
           lastSaved: new Date().toISOString(),
         };
 
-        // Send to API
-        const response = await fetch("/api/graph-layout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            topicId: currentTopic?.topic_id,
-            graphLayout: layout,
-          }),
-        });
+        // Validate layout
+        if (!layout || typeof layout !== "object") {
+          console.error("Invalid layout data:", layout);
+          setSaveStatus("error");
+          return;
+        }
 
-        if (!response.ok) throw new Error("Failed to save layout");
+        // Save to Supabase
+        const { data, error } = await supabase.from("User_Graph").upsert(
+          {
+            user_id: user.id,
+            topic_id: currentTopic.topic_id,
+            graph_layout: layout,
+          },
+          { onConflict: "user_id,topic_id" }
+        );
 
-        setSaveStatus("saved");
-        toast({ description: "Graph layout saved" });
+        if (error) {
+          console.error("Supabase Error Details:", error);
+          setSaveStatus("error");
+          toast({
+            description:
+              "Failed to save layout. Changes will be lost on refresh.",
+            variant: "destructive",
+          });
+        } else {
+          setSaveStatus("saved");
+          toast({ description: "Graph layout saved" });
+        }
       } catch (error) {
+        console.error("Save Error:", error);
         setSaveStatus("error");
-        toast({
-          description:
-            "Failed to save layout. Changes will be lost on refresh.",
-          variant: "destructive",
-        });
       }
-    }, 1000), // Debounce for 1 second
-    [nodes, edges, expandedNodes, visibleCount, currentTopic]
+    }, 1000),
+    [nodes, edges, expandedNodes, visibleCount, currentTopic, user]
   );
 
   // Update existing callbacks to save layout
@@ -220,6 +271,15 @@ export default function KnowledgeGraph() {
 
       if (!books) throw new Error("No books found");
 
+      // Analyze books if no connections exist
+      if (books.length > 0) {
+        try {
+          await analyzeBooks(books, mostRecentTopic);
+        } catch (error) {
+          console.error("Failed to analyze books:", error);
+        }
+      }
+
       const { data: connections } = await supabase
         .from("Skill_Map")
         .select("*")
@@ -241,6 +301,19 @@ export default function KnowledgeGraph() {
           connections,
           expandedNodes
         );
+
+        // Log initial books and connections
+        console.log("Initial Data:", {
+          visibleBooks: visibleData.books.map((b) => ({
+            id: b.google_books_id,
+            title: b.title,
+            level: b.level,
+          })),
+          connections: connections?.map((c) => ({
+            from: c.from_book_id,
+            to: c.to_book_id,
+          })),
+        });
 
         // Calculate position with horizontal spacing
         const calculatePosition = (
@@ -285,6 +358,7 @@ export default function KnowledgeGraph() {
                 status: book.status || "not_started",
                 isAdvanced: book.level === "advanced",
                 description: book.description,
+                initiallyVisible: index < 3, // First 3 nodes are visible
                 onClick: () =>
                   setSelectedBook({
                     id: book.google_books_id,
@@ -295,6 +369,12 @@ export default function KnowledgeGraph() {
                   }),
               },
               position: calculatePosition(level, index, books.length),
+              sourceConnections: books
+                .filter((b) => isValidConnection(book, b))
+                .map((b) => b.google_books_id),
+              targetConnections: books
+                .filter((b) => isValidConnection(b, book))
+                .map((b) => b.google_books_id),
             };
 
             console.log("Node data:", nodeData);
@@ -303,13 +383,16 @@ export default function KnowledgeGraph() {
         });
 
         // Create edges from valid connections
-        const edges = visibleData.connections.map((conn) => ({
-          id: `${conn.from_book_id}-${conn.to_book_id}`,
-          source: conn.from_book_id,
-          target: conn.to_book_id,
-          animated: true,
-          type: "bezier",
-        }));
+        const edges = visibleData.connections.map((conn) => {
+          console.log("Creating edge for connection:", conn);
+          return {
+            id: `${conn.from_book_id}-${conn.to_book_id}`,
+            source: conn.from_book_id,
+            target: conn.to_book_id,
+            animated: true,
+            type: "bezier",
+          };
+        });
 
         setNodes(nodes);
         setEdges(edges);
@@ -428,6 +511,13 @@ export default function KnowledgeGraph() {
         visibleBookIds.includes(conn.from_book_id) &&
         visibleBookIds.includes(conn.to_book_id);
 
+      console.log("Connection check:", {
+        connection: conn,
+        isVisible,
+        fromBookExists: visibleBookIds.includes(conn.from_book_id),
+        toBookExists: visibleBookIds.includes(conn.to_book_id),
+      });
+
       if (!isVisible) return false;
 
       const fromBook = books.find(
@@ -436,6 +526,12 @@ export default function KnowledgeGraph() {
       const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
 
       const isValid = isValidConnection(fromBook, toBook);
+      console.log("Connection validation:", {
+        fromBook: fromBook?.title,
+        toBook: toBook?.title,
+        isValid,
+      });
+
       return isValid;
     });
 
@@ -444,10 +540,47 @@ export default function KnowledgeGraph() {
       validConnections: validConnections.length,
     });
 
+    console.log("Valid connections after filtering:", validConnections);
+
     return {
       books: visibleBooks,
       connections: validConnections,
     };
+  };
+
+  const analyzeBooks = async (books: any[], topic: any) => {
+    console.log("Attempting to analyze books:", {
+      booksCount: books.length,
+      topic,
+      endpoint: "/api/analyze-books",
+    });
+
+    try {
+      const response = await fetch("/api/analyze-books", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ books, topic }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Analyze books failed:", {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorData,
+        });
+        throw new Error(`Failed to analyze books: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      console.log("Analysis complete:", data);
+      return data;
+    } catch (error) {
+      console.error("Error in analyzeBooks:", error);
+      throw error;
+    }
   };
 
   return (
