@@ -74,6 +74,10 @@ export default function KnowledgeGraph() {
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">(
     "saved"
   );
+  const [analysisInProgress, setAnalysisInProgress] = useState(false);
+  const [unanalyzedBooks, setUnanalyzedBooks] = useState<string[]>([]);
+  const [partialGraph, setPartialGraph] = useState(false);
+  const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
   const supabase = createClientComponentClient();
 
   // Get user on mount
@@ -230,6 +234,7 @@ export default function KnowledgeGraph() {
   const fetchGraphData = async () => {
     try {
       setLoading(true);
+      setPartialGraph(false);
       console.log("1. Starting fetchGraphData");
 
       const {
@@ -271,15 +276,21 @@ export default function KnowledgeGraph() {
 
       if (!books) throw new Error("No books found");
 
-      // Analyze books if no connections exist
-      if (books.length > 0) {
-        try {
-          await analyzeBooks(books, mostRecentTopic);
-        } catch (error) {
-          console.error("Failed to analyze books:", error);
-        }
+      // Check for unanalyzed books
+      const unanalyzedBookIds = books
+        .filter((book) => !book.analyzed)
+        .map((book) => book.google_books_id);
+
+      setUnanalyzedBooks(unanalyzedBookIds);
+
+      if (unanalyzedBookIds.length > 0) {
+        setPartialGraph(true);
+        setAnalysisInProgress(true);
+        // Trigger background analysis
+        analyzeBooks(books, mostRecentTopic).catch(console.error);
       }
 
+      // Load existing connections
       const { data: connections } = await supabase
         .from("Skill_Map")
         .select("*")
@@ -401,6 +412,7 @@ export default function KnowledgeGraph() {
       console.error("Error in fetchGraphData:", error);
     } finally {
       setLoading(false);
+      setLastUpdateTime(new Date());
     }
   };
 
@@ -409,6 +421,59 @@ export default function KnowledgeGraph() {
     console.log("Fetching graph data. Expanded nodes:", expandedNodes);
     fetchGraphData();
   }, [expandedNodes]); // Add expandedNodes to dependencies
+
+  // Add polling for analysis updates
+  useEffect(() => {
+    let pollInterval: NodeJS.Timeout;
+
+    if (analysisInProgress && unanalyzedBooks.length > 0) {
+      pollInterval = setInterval(async () => {
+        // Check for newly analyzed books
+        const { data: analyzedBooks } = await supabase
+          .from("Books")
+          .select("google_books_id")
+          .in("google_books_id", unanalyzedBooks)
+          .eq("analyzed", true);
+
+        if (analyzedBooks && analyzedBooks.length > 0) {
+          // Get new connections for analyzed books
+          const { data: newConnections } = await supabase
+            .from("Skill_Map")
+            .select("*")
+            .in(
+              "from_book_id",
+              analyzedBooks.map((b) => b.google_books_id)
+            )
+            .in(
+              "to_book_id",
+              analyzedBooks.map((b) => b.google_books_id)
+            );
+
+          // Update edges without re-fetching everything
+          if (newConnections) {
+            setEdges((currentEdges) => {
+              const newEdges = newConnections.map((conn) => ({
+                id: `${conn.from_book_id}-${conn.to_book_id}`,
+                source: conn.from_book_id,
+                target: conn.to_book_id,
+                animated: true,
+                type: "bezier",
+              }));
+              return [...currentEdges, ...newEdges];
+            });
+          }
+        }
+
+        // Stop polling if all books are analyzed
+        if (analyzedBooks?.length === unanalyzedBooks.length) {
+          setAnalysisInProgress(false);
+          setPartialGraph(false);
+        }
+      }, 5000);
+    }
+
+    return () => clearInterval(pollInterval);
+  }, [analysisInProgress, unanalyzedBooks]);
 
   console.log("Rendering with:", {
     nodesLength: nodes.length,
@@ -604,14 +669,19 @@ export default function KnowledgeGraph() {
             <div>
               <CardTitle className="font-semibold">Knowledge Graph</CardTitle>
               <CardDescription className="font-medium">
-                Showing {Math.min(visibleCount, nodes.length)} of {nodes.length}{" "}
-                books
+                {partialGraph
+                  ? `Analyzing books... ${
+                      nodes.length - unanalyzedBooks.length
+                    } of ${nodes.length} complete`
+                  : `Showing ${Math.min(visibleCount, nodes.length)} of ${
+                      nodes.length
+                    } books`}
               </CardDescription>
             </div>
             <Button
               onClick={handleShowMore}
               className="bg-black text-white font-medium"
-              disabled={expandedNodes.length >= nodes.length}
+              disabled={expandedNodes.length >= nodes.length || loading}
             >
               Show More
             </Button>
@@ -621,6 +691,18 @@ export default function KnowledgeGraph() {
           {loading ? (
             <div className="flex items-center justify-center h-full">
               Loading graph data...
+            </div>
+          ) : nodes.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full">
+              <p className="text-gray-500 mb-4">
+                No books found for this topic
+              </p>
+              <Button
+                onClick={() => fetchGraphData()}
+                className="bg-black text-white"
+              >
+                Retry
+              </Button>
             </div>
           ) : (
             <ReactFlow

@@ -178,6 +178,10 @@ export default function KnowledgeGraph({ params }: PageProps) {
   const supabase = createClientComponentClient();
   const { toast } = useToast();
   const router = useRouter();
+  const [analysisInProgress, setAnalysisInProgress] = useState(false);
+  const [unanalyzedBooks, setUnanalyzedBooks] = useState<string[]>([]);
+  const [partialGraph, setPartialGraph] = useState(false);
+  const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
 
   const saveGraphLayout = useCallback(
     debounce(async () => {
@@ -262,6 +266,7 @@ export default function KnowledgeGraph({ params }: PageProps) {
   const fetchGraphData = useCallback(async () => {
     try {
       setLoading(true);
+      setPartialGraph(false);
       console.log("Fetching graph data for topicId:", topicId);
 
       // 1. Try to get saved layout
@@ -335,6 +340,20 @@ export default function KnowledgeGraph({ params }: PageProps) {
         return;
       }
 
+      // Check for unanalyzed books
+      const unanalyzedBookIds = books
+        .filter((book) => !book.analyzed)
+        .map((book) => book.google_books_id);
+
+      setUnanalyzedBooks(unanalyzedBookIds);
+
+      if (unanalyzedBookIds.length > 0) {
+        setPartialGraph(true);
+        setAnalysisInProgress(true);
+        // Trigger background analysis
+        analyzeBooks(books, topic).catch(console.error);
+      }
+
       // Generate initial layout
       const initialNodes = books.map((book, index) => ({
         id: book.google_books_id,
@@ -367,89 +386,22 @@ export default function KnowledgeGraph({ params }: PageProps) {
       router.push("/dashboard");
     } finally {
       setLoading(false);
+      setLastUpdateTime(new Date());
     }
   }, [topicId, visibleCount]);
 
-  const handleShowMore = useCallback(async () => {
-    try {
-      if (allBooksLoaded) {
-        // Just update visibility of existing nodes
-        setExpandedNodes((prev) => {
-          const currentIds = new Set(prev);
-          const newIds = nodes
-            .filter((node) => !currentIds.has(node.id))
-            .slice(0, 3)
-            .map((node) => node.id);
-          return [...prev, ...newIds];
-        });
-        setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
-        saveGraphLayout();
-        return;
-      }
-
-      // Fetch more books
-      const { data: newBooks } = await supabase
-        .from("Books")
-        .select("*")
-        .eq("topic_id", topicId)
-        .range(visibleCount, visibleCount + 2);
-
-      if (newBooks?.length) {
-        const newNodes = newBooks.map((book, index) => ({
-          id: book.google_books_id,
-          type: "bookNode",
-          position: { x: (nodes.length + index) * 200, y: 100 },
-          data: {
-            id: book.google_books_id,
-            label: book.title,
-            level: book.level,
-            status: book.status || "not_started",
-            description: book.description,
-            isAdvanced: book.level === "advanced",
-            initiallyVisible: false,
-            onClick: () =>
-              setSelectedBook({
-                id: book.google_books_id,
-                title: book.title,
-                description: book.description,
-                status: book.status || "not_started",
-              }),
-          },
-          sourceConnections: nodes
-            .filter((n) => isValidConnection(book, n.data))
-            .map((n) => n.id),
-          targetConnections: nodes
-            .filter((n) => isValidConnection(n.data, book))
-            .map((n) => n.id),
-        }));
-
-        const newEdges = newNodes.flatMap((node) =>
-          [...node.sourceConnections, ...node.targetConnections].map(
-            (connectedId) => ({
-              id: `${node.id}-${connectedId}`,
-              source: node.id,
-              target: connectedId,
-              type: "bezier",
-              animated: true,
-              sourceLevel: node.data.level,
-              targetLevel: nodes.find((n) => n.id === connectedId)?.data.level,
-            })
-          )
-        );
-
-        setNodes((prev) => [...prev, ...newNodes]);
-        setEdges((prev) => [...prev, ...newEdges]);
-        setVisibleCount((prev) => prev + newBooks.length);
-        setAllBooksLoaded(newBooks.length < 3);
-        saveGraphLayout();
-      }
-    } catch (error) {
-      toast({
-        description: "Error loading more books",
-        variant: "destructive",
-      });
-    }
-  }, [nodes, visibleCount, allBooksLoaded, topicId]);
+  const handleShowMore = useCallback(() => {
+    setExpandedNodes((prev) => {
+      const currentIds = new Set(prev);
+      const newIds = nodes
+        .filter((node) => !currentIds.has(node.id))
+        .slice(0, 3)
+        .map((node) => node.id);
+      return [...prev, ...newIds];
+    });
+    setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
+    saveGraphLayout();
+  }, [nodes, saveGraphLayout]);
 
   useEffect(() => {
     fetchGraphData();
@@ -490,6 +442,59 @@ export default function KnowledgeGraph({ params }: PageProps) {
     [saveGraphLayout]
   );
 
+  // Add polling for analysis updates
+  useEffect(() => {
+    let pollInterval: NodeJS.Timeout;
+
+    if (analysisInProgress && unanalyzedBooks.length > 0) {
+      pollInterval = setInterval(async () => {
+        // Check for newly analyzed books
+        const { data: analyzedBooks } = await supabase
+          .from("Books")
+          .select("google_books_id")
+          .in("google_books_id", unanalyzedBooks)
+          .eq("analyzed", true);
+
+        if (analyzedBooks && analyzedBooks.length > 0) {
+          // Get new connections for analyzed books
+          const { data: newConnections } = await supabase
+            .from("Skill_Map")
+            .select("*")
+            .in(
+              "from_book_id",
+              analyzedBooks.map((b) => b.google_books_id)
+            )
+            .in(
+              "to_book_id",
+              analyzedBooks.map((b) => b.google_books_id)
+            );
+
+          // Update edges without re-fetching everything
+          if (newConnections) {
+            setEdges((currentEdges) => {
+              const newEdges = newConnections.map((conn) => ({
+                id: `${conn.from_book_id}-${conn.to_book_id}`,
+                source: conn.from_book_id,
+                target: conn.to_book_id,
+                animated: true,
+                type: "bezier",
+              }));
+              return [...currentEdges, ...newEdges];
+            });
+          }
+        }
+
+        // Stop polling if all books are analyzed
+        if (analyzedBooks?.length === unanalyzedBooks.length) {
+          setAnalysisInProgress(false);
+          setPartialGraph(false);
+        }
+      }, 5000);
+    }
+
+    return () => clearInterval(pollInterval);
+  }, [analysisInProgress, unanalyzedBooks]);
+
   return (
     <div className="p-4 w-full min-h-screen">
       <Button
@@ -511,14 +516,19 @@ export default function KnowledgeGraph({ params }: PageProps) {
             <div>
               <CardTitle className="font-semibold">Knowledge Graph</CardTitle>
               <CardDescription className="font-medium">
-                Showing {Math.min(visibleCount, nodes.length)} of {nodes.length}{" "}
-                books
+                {partialGraph
+                  ? `Analyzing books... ${
+                      nodes.length - unanalyzedBooks.length
+                    } of ${nodes.length} complete`
+                  : `Showing ${Math.min(visibleCount, nodes.length)} of ${
+                      nodes.length
+                    } books`}
               </CardDescription>
             </div>
             <Button
               onClick={handleShowMore}
               className="bg-black text-white font-medium"
-              disabled={expandedNodes.length >= nodes.length}
+              disabled={expandedNodes.length >= nodes.length || loading}
             >
               Show More
             </Button>
@@ -528,6 +538,18 @@ export default function KnowledgeGraph({ params }: PageProps) {
           {loading ? (
             <div className="flex items-center justify-center h-full">
               Loading graph data...
+            </div>
+          ) : nodes.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full">
+              <p className="text-gray-500 mb-4">
+                No books found for this topic
+              </p>
+              <Button
+                onClick={() => fetchGraphData()}
+                className="bg-black text-white"
+              >
+                Retry
+              </Button>
             </div>
           ) : (
             <ReactFlow

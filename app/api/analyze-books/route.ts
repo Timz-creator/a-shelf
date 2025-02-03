@@ -192,7 +192,7 @@ export async function POST(request: Request) {
           if (connections.length > 0) {
             const { error: connectionError } = await supabase
               .from("Skill_Map")
-              .upsert(connections, { onConflict: "from_book_id,to_book_id" });
+              .insert(connections);
 
             if (connectionError) {
               console.error(
