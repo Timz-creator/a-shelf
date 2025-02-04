@@ -29,6 +29,8 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const topic = searchParams.get("topic");
 
+    console.log("Fetching books for topic:", topic);
+
     if (!topic) {
       return NextResponse.json(
         { error: "Topic parameter is required" },
@@ -44,11 +46,23 @@ export async function GET(request: Request) {
       }&maxResults=40&printType=books&langRestrict=en`
     );
 
+    console.log("Google Books API response status:", response.status);
+
     if (!response.ok) {
       throw new Error(`Google Books API error: ${response.statusText}`);
     }
 
     const rawData = await response.json();
+
+    console.log("Books found:", {
+      total: rawData.items?.length,
+      filtered: rawData.items?.filter(
+        (item) =>
+          item.volumeInfo.title &&
+          item.volumeInfo.authors?.length > 0 &&
+          item.volumeInfo.description
+      ).length,
+    });
 
     // Transform and filter the data
     const books: Book[] = rawData.items

@@ -216,18 +216,29 @@ export default function KnowledgeGraph() {
     [saveGraphLayout]
   );
 
-  // Update the handleShowMore function
+  // Updates the graph to show more nodes when user clicks "Show More"
   const handleShowMore = useCallback(() => {
+    // Update which nodes are expanded/visible
     setExpandedNodes((prev) => {
+      // Get current set of visible node IDs
       const currentlyShown = new Set(prev);
+
+      // Find next 3 nodes that aren't currently shown
       const nextNodes = nodes
         .filter((node) => !currentlyShown.has(node.id))
-        .slice(0, 3)
+        .slice(0, 3) // Take next 3 nodes
         .map((node) => node.id);
+
+      // Combine previously shown nodes with new nodes
       const newExpanded = [...prev, ...nextNodes];
-      saveGraphLayout(); // Save when more nodes are shown
+
+      // Save the new layout to persist user's view
+      saveGraphLayout();
+
       return newExpanded;
     });
+
+    // Update count of visible nodes (max = total nodes)
     setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
   }, [nodes, saveGraphLayout]);
 

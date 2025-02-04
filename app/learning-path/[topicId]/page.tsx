@@ -267,7 +267,14 @@ export default function KnowledgeGraph({ params }: PageProps) {
     try {
       setLoading(true);
       setPartialGraph(false);
-      console.log("Fetching graph data for topicId:", topicId);
+      console.log("Fetching data for topic:", topicId);
+
+      // Get authenticated user for loading their progress
+      // This is needed to fetch the correct progress data for this user
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("No authenticated user");
 
       // 1. Try to get saved layout
       const { data: savedLayout } = await supabase
@@ -331,6 +338,12 @@ export default function KnowledgeGraph({ params }: PageProps) {
         .eq("topic_id", topicId)
         .limit(visibleCount);
 
+      console.log("Books query result:", {
+        found: !!books?.length,
+        count: books?.length,
+        topicId,
+      });
+
       if (!books?.length) {
         toast({
           description: "No books found for this topic",
@@ -339,6 +352,17 @@ export default function KnowledgeGraph({ params }: PageProps) {
         router.push("/dashboard");
         return;
       }
+
+      // Load all progress entries for this user's books
+      // This gets the saved status (not_started/in_progress/completed) for each book
+      const { data: userProgress } = await supabase
+        .from("User_Progress")
+        .select("*")
+        .eq("user_id", user.id)
+        .in(
+          "book_id",
+          books.map((b) => b.google_books_id)
+        );
 
       // Check for unanalyzed books
       const unanalyzedBookIds = books
@@ -363,14 +387,20 @@ export default function KnowledgeGraph({ params }: PageProps) {
           id: book.google_books_id,
           label: book.title,
           level: book.level,
-          status: book.status || "not_started",
+          // Apply saved progress status from database, fallback to not_started if none found
+          status:
+            userProgress?.find((p) => p.book_id === book.google_books_id)
+              ?.status || "not_started",
           description: book.description,
           onClick: () =>
             setSelectedBook({
               id: book.google_books_id,
               title: book.title,
               description: book.description,
-              status: book.status || "not_started",
+              // Also update the selected book view with saved progress
+              status:
+                userProgress?.find((p) => p.book_id === book.google_books_id)
+                  ?.status || "not_started",
             }),
         },
       }));
@@ -392,15 +422,16 @@ export default function KnowledgeGraph({ params }: PageProps) {
 
   const handleShowMore = useCallback(() => {
     setExpandedNodes((prev) => {
-      const currentIds = new Set(prev);
-      const newIds = nodes
-        .filter((node) => !currentIds.has(node.id))
+      const currentlyShown = new Set(prev);
+      const nextNodes = nodes
+        .filter((node) => !currentlyShown.has(node.id))
         .slice(0, 3)
         .map((node) => node.id);
-      return [...prev, ...newIds];
+      const newExpanded = [...prev, ...nextNodes];
+      saveGraphLayout();
+      setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
+      return newExpanded;
     });
-    setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
-    saveGraphLayout();
   }, [nodes, saveGraphLayout]);
 
   useEffect(() => {

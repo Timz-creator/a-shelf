@@ -33,10 +33,10 @@ export async function POST(request: Request) {
 
     // Log request data
     const { books, topic } = await request.json();
-    console.log("3. Request data:", {
+    console.log("2. Received request:", {
       booksCount: books?.length,
       topicId: topic?.id,
-      sampleBook: books?.[0]?.volumeInfo?.title,
+      firstBook: books?.[0]?.volumeInfo?.title,
     });
 
     if (!books || !topic) {
@@ -90,13 +90,24 @@ export async function POST(request: Request) {
           2. Required prerequisite books (by ID) - books that should be read before this one
           3. Recommended next books (by ID) - books that naturally follow this one
 
-          Important:
-          - Beginner books should have no prerequisites
-          - Advanced books should have prerequisites
-          - Create natural progression paths between books
-          - Connect books based on complexity and topic coverage
-          - Ensure each non-beginner book has at least one prerequisite
-          - Ensure each non-advanced book suggests at least one next book
+          Important Connection Rules:
+
+          1. Level-Based Requirements:
+            Beginner Books:
+            - MUST have at least 1 connection to intermediate
+            - More connections allowed if books available
+            
+            Intermediate Books:
+            - MUST have at least 1 connection from beginner
+            - MUST have at least 1 connection to advanced
+            
+            Advanced Books:
+            - MUST have at least 1 connection from intermediate
+
+          2. General Rules:
+            - No book can be isolated
+            - Connections must follow level order (beginner->intermediate->advanced)
+            - Add more connections when more books are available
 
           Books to analyze:
           ${JSON.stringify(batch, null, 2)}
