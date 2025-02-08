@@ -17,6 +17,12 @@ type ValidationError = {
   issues: string[];
 };
 
+// Add GraphOptions interface
+interface GraphOptions {
+  visibleCount: number;
+  isPartialGraph: boolean;
+}
+
 // Add validation function
 function validateAnalysis(analysis: {
   books: BookAnalysis[];
@@ -85,6 +91,81 @@ const openai = new OpenAI({
 
 const MAX_RETRIES = 3; // Maximum number of analysis attempts
 
+// Update enforceGraphRules signature
+function enforceGraphRules(
+  analysis: { books: BookAnalysis[] },
+  options: GraphOptions
+): BookAnalysis[] {
+  if (options.isPartialGraph) {
+    // Only process visible books
+    const visibleBooks = analysis.books.slice(0, options.visibleCount);
+    return visibleBooks;
+  }
+
+  const bookMap = new Map(analysis.books.map((b) => [b.id, b]));
+
+  for (const book of analysis.books) {
+    // Ensure beginner books have at least 2 outgoing connections
+    if (book.difficulty === "beginner" && book.nextBooks.length < 2) {
+      const intermediateBooks = analysis.books.filter(
+        (b) => b.difficulty === "intermediate"
+      );
+      if (intermediateBooks.length >= 2) {
+        book.nextBooks = intermediateBooks.slice(0, 2).map((b) => b.id);
+      }
+    }
+
+    // Ensure intermediate books have at least 2 incoming and 2 outgoing connections
+    if (book.difficulty === "intermediate") {
+      const incomingCount = analysis.books.filter((b) =>
+        b.nextBooks.includes(book.id)
+      ).length;
+      if (incomingCount < 2) {
+        const beginnerBooks = analysis.books.filter(
+          (b) => b.difficulty === "beginner"
+        );
+        if (beginnerBooks.length >= 2) {
+          beginnerBooks.slice(0, 2).forEach((b) => {
+            if (!b.nextBooks.includes(book.id)) {
+              b.nextBooks.push(book.id);
+            }
+          });
+        }
+      }
+
+      if (book.nextBooks.length < 2) {
+        const advancedBooks = analysis.books.filter(
+          (b) => b.difficulty === "advanced"
+        );
+        if (advancedBooks.length >= 2) {
+          book.nextBooks = advancedBooks.slice(0, 2).map((b) => b.id);
+        }
+      }
+    }
+
+    // Ensure advanced books have at least 2 incoming connections
+    if (book.difficulty === "advanced") {
+      const incomingCount = analysis.books.filter((b) =>
+        b.nextBooks.includes(book.id)
+      ).length;
+      if (incomingCount < 2) {
+        const intermediateBooks = analysis.books.filter(
+          (b) => b.difficulty === "intermediate"
+        );
+        if (intermediateBooks.length >= 2) {
+          intermediateBooks.slice(0, 2).forEach((b) => {
+            if (!b.nextBooks.includes(book.id)) {
+              b.nextBooks.push(book.id);
+            }
+          });
+        }
+      }
+    }
+  }
+
+  return analysis.books;
+}
+
 export async function POST(request: Request) {
   try {
     console.log("1. Starting analyze-books endpoint");
@@ -121,7 +202,7 @@ export async function POST(request: Request) {
       .eq("topic_id", topic.id)
       .eq("analyzed", true);
 
-    if (existingBooks?.length > 0) {
+    if (existingBooks && existingBooks.length > 0) {
       console.log("Found existing analyzed books:", existingBooks.length);
 
       // Get existing connections
@@ -205,7 +286,7 @@ export async function POST(request: Request) {
         const completion = await openai.chat.completions.create({
           messages: [{ role: "user", content: prompt }],
           model: "gpt-4o",
-          temperature: analysisAttempt * 0.1,
+          temperature: 0.1, // Low temperature for deterministic output
         });
 
         console.log("OpenAI Response:", {
@@ -231,6 +312,14 @@ export async function POST(request: Request) {
           firstBook: analysis?.books?.[0],
         });
 
+        // Try to fix connections with post-processing first
+        console.log("Attempting to fix connections with post-processing");
+        analysis.books = enforceGraphRules(analysis, {
+          visibleCount: books.length,
+          isPartialGraph: false,
+        });
+
+        // Then validate the fixed connections
         validationErrors = validateAnalysis(analysis);
       } catch (attemptError) {
         console.error("Error in analysis attempt:", {
