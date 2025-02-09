@@ -28,6 +28,7 @@ import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 import debounce from "lodash/debounce";
 import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
 
 // Move isValidConnection outside of fetchGraphData
 const isValidConnection = (fromBook: any, toBook: any) => {
@@ -58,6 +59,20 @@ interface CustomNode extends Node {
   };
 }
 
+const calculatePosition = (
+  level: string,
+  index: number,
+  totalInLevel: number,
+  isPreview = false
+) => {
+  const CANVAS_WIDTH = 800;
+  const spacing = CANVAS_WIDTH / (totalInLevel + 1);
+  const x = spacing * (index + 1);
+  let y = level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
+  if (isPreview) y += 200; // Position preview nodes lower
+  return { x, y };
+};
+
 export default function KnowledgeGraph() {
   const [loading, setLoading] = useState(true);
   const [nodes, setNodes] = useState<CustomNode[]>([]);
@@ -78,6 +93,7 @@ export default function KnowledgeGraph() {
   const [unanalyzedBooks, setUnanalyzedBooks] = useState<string[]>([]);
   const [partialGraph, setPartialGraph] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
+  const [previewNodes, setPreviewNodes] = useState<CustomNode[]>([]);
   const supabase = createClientComponentClient();
 
   // Get user on mount
@@ -123,17 +139,18 @@ export default function KnowledgeGraph() {
               initiallyVisible: nodes.indexOf(node) < 3,
             },
           })),
-          edges: Array.from(new Set(edges.map((e) => JSON.stringify(e))))
-            .map((e) => JSON.parse(e))
-            .map((edge) => ({
-              id: edge.id,
-              source: edge.source,
-              target: edge.target,
-              type: "bezier",
-              animated: true,
-              sourceLevel: nodes.find((n) => n.id === edge.source)?.data.level,
-              targetLevel: nodes.find((n) => n.id === edge.target)?.data.level,
-            })),
+          edges: edges.map((edge) => ({
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            type: "bezier",
+          })),
+          previewNodes: previewNodes.map((node) => ({
+            id: node.id,
+            type: "previewNode",
+            position: node.position,
+            data: node.data,
+          })),
           expandedNodes,
           visibleCount,
           lastSaved: new Date().toISOString(),
@@ -173,7 +190,15 @@ export default function KnowledgeGraph() {
         setSaveStatus("error");
       }
     }, 1000),
-    [nodes, edges, expandedNodes, visibleCount, currentTopic, user]
+    [
+      nodes,
+      edges,
+      expandedNodes,
+      visibleCount,
+      currentTopic,
+      user,
+      previewNodes,
+    ]
   );
 
   // Update existing callbacks to save layout
@@ -218,29 +243,23 @@ export default function KnowledgeGraph() {
 
   // Updates the graph to show more nodes when user clicks "Show More"
   const handleShowMore = useCallback(() => {
-    // Update which nodes are expanded/visible
     setExpandedNodes((prev) => {
-      // Get current set of visible node IDs
       const currentlyShown = new Set(prev);
+      const nextNodes = previewNodes
+        .filter((node) => !currentlyShown.has(node.data.id))
+        .slice(0, 3)
+        .map((node) => node.data.id);
 
-      // Find next 3 nodes that aren't currently shown
-      const nextNodes = nodes
-        .filter((node) => !currentlyShown.has(node.id))
-        .slice(0, 3) // Take next 3 nodes
-        .map((node) => node.id);
-
-      // Combine previously shown nodes with new nodes
       const newExpanded = [...prev, ...nextNodes];
-
-      // Save the new layout to persist user's view
       saveGraphLayout();
+      setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
+
+      // Remove used preview nodes
+      setPreviewNodes((prev) => prev.slice(3));
 
       return newExpanded;
     });
-
-    // Update count of visible nodes (max = total nodes)
-    setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
-  }, [nodes, saveGraphLayout]);
+  }, [previewNodes, nodes.length, saveGraphLayout]);
 
   const fetchGraphData = async () => {
     try {
@@ -336,23 +355,6 @@ export default function KnowledgeGraph() {
             to: c.to_book_id,
           })),
         });
-
-        // Calculate position with horizontal spacing
-        const calculatePosition = (
-          level: string,
-          index: number,
-          totalInLevel: number
-        ) => {
-          const CANVAS_WIDTH = 800; // Total width available
-          const spacing = CANVAS_WIDTH / (totalInLevel + 1); // Even spacing
-          const x = spacing * (index + 1); // Position based on index
-
-          // Vertical position based on level
-          const y =
-            level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
-
-          return { x, y };
-        };
 
         // Create nodes with positions
         const nodesByLevel = {
@@ -555,74 +557,86 @@ export default function KnowledgeGraph() {
     return selectedBooks;
   };
 
-  // Update getVisibleNodes to handle connections
-  const getVisibleNodes = (
-    books: any[],
-    userLevel: string,
-    connections: any[],
-    expandedNodeIds: string[]
-  ) => {
-    console.log("getVisibleNodes input:", {
-      totalBooks: books.length,
-      userLevel,
-      totalConnections: connections.length,
-      expandedNodeIds,
-    });
-
-    const visibleBooks = filterInitialNodes(
-      books,
-      userLevel,
-      connections,
-      expandedNodeIds.length + 3
-    );
-
-    console.log("After filterInitialNodes:", {
-      visibleBooks: visibleBooks.length,
-      bookLevels: visibleBooks.map((b) => b.level),
-    });
-
-    const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
-    const validConnections = connections.filter((conn) => {
-      const isVisible =
-        visibleBookIds.includes(conn.from_book_id) &&
-        visibleBookIds.includes(conn.to_book_id);
-
-      console.log("Connection check:", {
-        connection: conn,
-        isVisible,
-        fromBookExists: visibleBookIds.includes(conn.from_book_id),
-        toBookExists: visibleBookIds.includes(conn.to_book_id),
-      });
-
-      if (!isVisible) return false;
-
-      const fromBook = books.find(
-        (b) => b.google_books_id === conn.from_book_id
+  // Update getVisibleNodes to handle connections and previews
+  const getVisibleNodes = useCallback(
+    (
+      books: any[],
+      userLevel: string,
+      connections: any[],
+      expandedNodeIds: string[]
+    ) => {
+      const visibleBooks = filterInitialNodes(
+        books,
+        userLevel,
+        connections,
+        expandedNodeIds.length + 3
       );
-      const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
 
-      const isValid = isValidConnection(fromBook, toBook);
-      console.log("Connection validation:", {
-        fromBook: fromBook?.title,
-        toBook: toBook?.title,
-        isValid,
+      // Get preview books (next 2-3 after visible ones)
+      const previewBooks = books
+        .filter((book) => !visibleBooks.includes(book))
+        .slice(0, 2)
+        .map((book, index) => ({
+          id: `preview-${book.google_books_id}`,
+          type: "previewNode",
+          position: calculatePosition(book.level, index, 2, true),
+          data: {
+            id: book.google_books_id,
+            label: book.title,
+            level: book.level,
+            status: "not_started",
+            description: book.description,
+            isAdvanced: book.level === "advanced",
+            initiallyVisible: false,
+          },
+        }));
+
+      setPreviewNodes(previewBooks);
+
+      const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
+      const validConnections = connections.filter((conn) => {
+        const isVisible =
+          visibleBookIds.includes(conn.from_book_id) &&
+          visibleBookIds.includes(conn.to_book_id);
+
+        console.log("Connection check:", {
+          connection: conn,
+          isVisible,
+          fromBookExists: visibleBookIds.includes(conn.from_book_id),
+          toBookExists: visibleBookIds.includes(conn.to_book_id),
+        });
+
+        if (!isVisible) return false;
+
+        const fromBook = books.find(
+          (b) => b.google_books_id === conn.from_book_id
+        );
+        const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
+
+        const isValid = isValidConnection(fromBook, toBook);
+        console.log("Connection validation:", {
+          fromBook: fromBook?.title,
+          toBook: toBook?.title,
+          isValid,
+        });
+
+        return isValid;
       });
 
-      return isValid;
-    });
+      console.log("Final output:", {
+        visibleBooks: visibleBooks.length,
+        validConnections: validConnections.length,
+      });
 
-    console.log("Final output:", {
-      visibleBooks: visibleBooks.length,
-      validConnections: validConnections.length,
-    });
+      console.log("Valid connections after filtering:", validConnections);
 
-    console.log("Valid connections after filtering:", validConnections);
-
-    return {
-      books: visibleBooks,
-      connections: validConnections,
-    };
-  };
+      return {
+        books: visibleBooks,
+        connections: validConnections,
+      };
+    },
+    []
+  );
 
   const analyzeBooks = async (books: any[], topic: any) => {
     console.log("Attempting to analyze books:", {
@@ -698,7 +712,7 @@ export default function KnowledgeGraph() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="h-[calc(100%-100px)] p-0">
+        <CardContent className="h-[calc(100%-100px)] p-0 relative">
           {loading ? (
             <div className="flex items-center justify-center h-full">
               Loading graph data...
@@ -716,19 +730,21 @@ export default function KnowledgeGraph() {
               </Button>
             </div>
           ) : (
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              fitView
-              style={{ width: "100%", height: "100%" }}
-            >
-              <Background color="#f0f0f0" variant="dots" />
-              <Controls />
-            </ReactFlow>
+            <>
+              <ReactFlow
+                nodes={[...nodes, ...previewNodes]}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                fitView
+                style={{ width: "100%", height: "100%" }}
+              >
+                <Background color="#f0f0f0" variant="dots" />
+                <Controls />
+              </ReactFlow>
+            </>
           )}
         </CardContent>
       </Card>

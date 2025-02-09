@@ -51,117 +51,6 @@ interface CustomNode extends Node {
   };
 }
 
-const isValidConnection = (fromBook: any, toBook: any) => {
-  if (fromBook.level === "beginner") {
-    return toBook.level === "intermediate";
-  }
-  if (fromBook.level === "intermediate") {
-    return toBook.level === "advanced";
-  }
-  return false;
-};
-
-const filterInitialNodes = (
-  books: any[],
-  userLevel: string,
-  connections: any[],
-  showCount: number = 5
-) => {
-  const booksByLevel = {
-    beginner: books.filter((b) => b.level === "beginner"),
-    intermediate: books.filter((b) => b.level === "intermediate"),
-    advanced: books.filter((b) => b.level === "advanced"),
-  };
-
-  const initialSet = (() => {
-    switch (userLevel) {
-      case "beginner":
-        return {
-          beginner: 2,
-          intermediate: 1,
-          advanced: 0,
-        };
-      case "intermediate":
-        return {
-          beginner: 2,
-          intermediate: 2,
-          advanced: 1,
-        };
-      case "advanced":
-        return {
-          beginner: 0,
-          intermediate: 2,
-          advanced: 2,
-        };
-      default:
-        return { beginner: 0, intermediate: 0, advanced: 0 };
-    }
-  })();
-
-  let selectedBooks = [
-    ...booksByLevel.beginner.slice(0, initialSet.beginner),
-    ...booksByLevel.intermediate.slice(0, initialSet.intermediate),
-    ...booksByLevel.advanced.slice(0, initialSet.advanced),
-  ];
-
-  if (showCount > selectedBooks.length) {
-    const remainingCount = showCount - selectedBooks.length;
-    const selectedIds = new Set(selectedBooks.map((b) => b.google_books_id));
-    const additionalBooks = books
-      .filter((b) => !selectedIds.has(b.google_books_id))
-      .slice(0, remainingCount);
-
-    selectedBooks = [...selectedBooks, ...additionalBooks];
-  }
-
-  return selectedBooks;
-};
-
-const getVisibleNodes = (
-  books: any[],
-  userLevel: string,
-  connections: any[],
-  expandedNodeIds: string[]
-) => {
-  const visibleBooks = filterInitialNodes(
-    books,
-    userLevel,
-    connections,
-    expandedNodeIds.length + 3
-  );
-
-  const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
-  const validConnections = connections.filter((conn) => {
-    const isVisible =
-      visibleBookIds.includes(conn.from_book_id) &&
-      visibleBookIds.includes(conn.to_book_id);
-
-    if (!isVisible) return false;
-
-    const fromBook = books.find((b) => b.google_books_id === conn.from_book_id);
-    const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
-
-    return isValidConnection(fromBook, toBook);
-  });
-
-  return {
-    books: visibleBooks,
-    connections: validConnections,
-  };
-};
-
-const calculatePosition = (
-  level: string,
-  index: number,
-  totalInLevel: number
-) => {
-  const CANVAS_WIDTH = 800;
-  const spacing = CANVAS_WIDTH / (totalInLevel + 1);
-  const x = spacing * (index + 1);
-  const y = level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
-  return { x, y };
-};
-
 export default function KnowledgeGraph({ params }: PageProps) {
   const { topicId } = params;
   console.log("KnowledgeGraph mounted with topicId:", topicId);
@@ -182,6 +71,67 @@ export default function KnowledgeGraph({ params }: PageProps) {
   const [unanalyzedBooks, setUnanalyzedBooks] = useState<string[]>([]);
   const [partialGraph, setPartialGraph] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
+  const [previewNodes, setPreviewNodes] = useState<CustomNode[]>([]);
+
+  const filterInitialNodes = useCallback(
+    (
+      books: any[],
+      userLevel: string,
+      connections: any[],
+      showCount: number
+    ) => {
+      const booksByLevel = {
+        beginner: books.filter((b) => b.level === "beginner"),
+        intermediate: books.filter((b) => b.level === "intermediate"),
+        advanced: books.filter((b) => b.level === "advanced"),
+      };
+
+      const initialSet = (() => {
+        switch (userLevel) {
+          case "beginner":
+            return {
+              beginner: 2,
+              intermediate: 1,
+              advanced: 0,
+            };
+          case "intermediate":
+            return {
+              beginner: 2,
+              intermediate: 2,
+              advanced: 1,
+            };
+          case "advanced":
+            return {
+              beginner: 0,
+              intermediate: 2,
+              advanced: 2,
+            };
+          default:
+            return { beginner: 0, intermediate: 0, advanced: 0 };
+        }
+      })();
+
+      let selectedBooks = [
+        ...booksByLevel.beginner.slice(0, initialSet.beginner),
+        ...booksByLevel.intermediate.slice(0, initialSet.intermediate),
+        ...booksByLevel.advanced.slice(0, initialSet.advanced),
+      ];
+
+      if (showCount > selectedBooks.length) {
+        const remainingCount = showCount - selectedBooks.length;
+        const selectedIds = new Set(
+          selectedBooks.map((b) => b.google_books_id)
+        );
+        const additionalBooks = books
+          .filter((b) => !selectedIds.has(b.google_books_id))
+          .slice(0, remainingCount);
+        selectedBooks = [...selectedBooks, ...additionalBooks];
+      }
+
+      return selectedBooks;
+    },
+    []
+  );
 
   const saveGraphLayout = useCallback(
     debounce(async () => {
@@ -209,17 +159,18 @@ export default function KnowledgeGraph({ params }: PageProps) {
               initiallyVisible: nodes.indexOf(node) < 3,
             },
           })),
-          edges: Array.from(new Set(edges.map((e) => JSON.stringify(e))))
-            .map((e) => JSON.parse(e))
-            .map((edge) => ({
-              id: edge.id,
-              source: edge.source,
-              target: edge.target,
-              type: "bezier",
-              animated: true,
-              sourceLevel: nodes.find((n) => n.id === edge.source)?.data.level,
-              targetLevel: nodes.find((n) => n.id === edge.target)?.data.level,
-            })),
+          edges: edges.map((edge) => ({
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            type: "bezier",
+          })),
+          previewNodes: previewNodes.map((node) => ({
+            id: node.id,
+            type: "previewNode",
+            position: node.position,
+            data: node.data,
+          })),
           expandedNodes,
           visibleCount,
           lastSaved: new Date().toISOString(),
@@ -260,7 +211,7 @@ export default function KnowledgeGraph({ params }: PageProps) {
         });
       }
     }, 1000),
-    [nodes, edges, expandedNodes, visibleCount, topicId]
+    [nodes, edges, expandedNodes, visibleCount, topicId, previewNodes]
   );
 
   const fetchGraphData = useCallback(async () => {
@@ -328,15 +279,45 @@ export default function KnowledgeGraph({ params }: PageProps) {
         setEdges(restoredEdges);
         setExpandedNodes(savedLayout.graph_layout.expandedNodes);
         setVisibleCount(savedLayout.graph_layout.visibleCount);
+
+        // Restore preview nodes if they exist
+        if (savedLayout.graph_layout.previewNodes) {
+          const restoredPreviews = savedLayout.graph_layout.previewNodes.map(
+            (node) => ({
+              ...node,
+              data: {
+                ...node.data,
+                status: node.data.status || "not_started",
+              },
+            })
+          );
+          setPreviewNodes(restoredPreviews);
+        }
         return;
       }
 
       // 2. If no saved layout, fetch initial data
+      const { data: topic } = await supabase
+        .from("Topics")
+        .select("*")
+        .eq("id", topicId)
+        .single();
+
+      if (!topic) {
+        throw new Error("Topic not found");
+      }
+
       const { data: books } = await supabase
         .from("Books")
         .select("*")
         .eq("topic_id", topicId)
-        .limit(visibleCount);
+        .order("level");
+
+      // Get connections between books
+      const { data: connections } = await supabase
+        .from("Skill_Map")
+        .select("*")
+        .eq("topic_id", topicId);
 
       console.log("Books query result:", {
         found: !!books?.length,
@@ -378,11 +359,24 @@ export default function KnowledgeGraph({ params }: PageProps) {
         analyzeBooks(books, topic).catch(console.error);
       }
 
-      // Generate initial layout
-      const initialNodes = books.map((book, index) => ({
+      // Get user's level for the topic
+      const { data: userTopic } = await supabase
+        .from("User_Topics")
+        .select("skill_level")
+        .eq("topic_id", topicId)
+        .single();
+
+      const userLevel = userTopic?.skill_level || "beginner";
+
+      // Get visible books and create preview nodes
+      const { books: visibleBooks, connections: validConnections } =
+        getVisibleNodes(books, userLevel, connections || [], []);
+
+      // Create nodes from visible books
+      const initialNodes = visibleBooks.map((book, index) => ({
         id: book.google_books_id,
         type: "bookNode",
-        position: { x: index * 200, y: 100 },
+        position: calculatePosition(book.level, index, books.length),
         data: {
           id: book.google_books_id,
           label: book.title,
@@ -405,8 +399,18 @@ export default function KnowledgeGraph({ params }: PageProps) {
         },
       }));
 
+      // Create edges from valid connections
+      const initialEdges = validConnections.map((conn) => ({
+        id: `${conn.from_book_id}-${conn.to_book_id}`,
+        source: conn.from_book_id,
+        target: conn.to_book_id,
+        type: "bezier",
+        animated: true,
+      }));
+
       setNodes(initialNodes);
-      setAllBooksLoaded(books.length < visibleCount);
+      setEdges(initialEdges);
+      setAllBooksLoaded(true);
     } catch (error) {
       console.error("Error in fetchGraphData:", error);
       toast({
@@ -418,21 +422,26 @@ export default function KnowledgeGraph({ params }: PageProps) {
       setLoading(false);
       setLastUpdateTime(new Date());
     }
-  }, [topicId, visibleCount]);
+  }, [topicId, getVisibleNodes, router, toast, supabase]);
 
   const handleShowMore = useCallback(() => {
     setExpandedNodes((prev) => {
       const currentlyShown = new Set(prev);
-      const nextNodes = nodes
-        .filter((node) => !currentlyShown.has(node.id))
+      const nextNodes = previewNodes
+        .filter((node) => !currentlyShown.has(node.data.id))
         .slice(0, 3)
-        .map((node) => node.id);
+        .map((node) => node.data.id);
+
       const newExpanded = [...prev, ...nextNodes];
       saveGraphLayout();
       setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
+
+      // Remove used preview nodes
+      setPreviewNodes((prev) => prev.slice(3));
+
       return newExpanded;
     });
-  }, [nodes, saveGraphLayout]);
+  }, [previewNodes, nodes.length, saveGraphLayout]);
 
   useEffect(() => {
     fetchGraphData();
@@ -525,6 +534,90 @@ export default function KnowledgeGraph({ params }: PageProps) {
 
     return () => clearInterval(pollInterval);
   }, [analysisInProgress, unanalyzedBooks]);
+
+  // Add calculatePosition
+  const calculatePosition = useCallback(
+    (level: string, index: number, totalInLevel: number, isPreview = false) => {
+      const CANVAS_WIDTH = 800;
+      const spacing = CANVAS_WIDTH / (totalInLevel + 1);
+      const x = spacing * (index + 1);
+      let y = level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
+      if (isPreview) y += 200;
+      return { x, y };
+    },
+    []
+  );
+
+  // Move isValidConnection inside
+  const isValidConnection = useCallback((fromBook: any, toBook: any) => {
+    if (fromBook.level === "beginner") {
+      return toBook.level === "intermediate";
+    }
+    if (fromBook.level === "intermediate") {
+      return toBook.level === "advanced";
+    }
+    return false;
+  }, []);
+
+  // Move getVisibleNodes inside and make it useCallback
+  const getVisibleNodes = useCallback(
+    (
+      books: any[],
+      userLevel: string,
+      connections: any[],
+      expandedNodeIds: string[]
+    ) => {
+      const visibleBooks = filterInitialNodes(
+        books,
+        userLevel,
+        connections,
+        expandedNodeIds.length + 3
+      );
+
+      // Filter valid connections
+      const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
+      const validConnections = connections.filter((conn) => {
+        const isVisible =
+          visibleBookIds.includes(conn.from_book_id) &&
+          visibleBookIds.includes(conn.to_book_id);
+
+        if (!isVisible) return false;
+
+        const fromBook = books.find(
+          (b) => b.google_books_id === conn.from_book_id
+        );
+        const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
+
+        return isValidConnection(fromBook, toBook);
+      });
+
+      // Create preview nodes
+      const previewBooks = books
+        .filter((book) => !visibleBooks.includes(book))
+        .slice(0, 2)
+        .map((book, index) => ({
+          id: `preview-${book.google_books_id}`,
+          type: "previewNode",
+          position: calculatePosition(book.level, index, 2, true),
+          data: {
+            id: book.google_books_id,
+            label: book.title,
+            level: book.level,
+            status: "not_started",
+            description: book.description,
+            isAdvanced: book.level === "advanced",
+            initiallyVisible: false,
+          },
+        }));
+
+      setPreviewNodes(previewBooks);
+      return {
+        books: visibleBooks,
+        connections: validConnections,
+      };
+    },
+    [setPreviewNodes, filterInitialNodes, calculatePosition, isValidConnection]
+  );
 
   return (
     <div className="p-4 w-full min-h-screen">
