@@ -72,6 +72,9 @@ export default function KnowledgeGraph({ params }: PageProps) {
   const [partialGraph, setPartialGraph] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
   const [previewNodes, setPreviewNodes] = useState<CustomNode[]>([]);
+  const [allBooks, setAllBooks] = useState<any[]>([]);
+  const [allConnections, setAllConnections] = useState<any[]>([]);
+  const [userLevel, setUserLevel] = useState<string>("beginner");
 
   const filterInitialNodes = useCallback(
     (
@@ -131,6 +134,93 @@ export default function KnowledgeGraph({ params }: PageProps) {
       return selectedBooks;
     },
     []
+  );
+
+  const calculatePosition = useCallback(
+    (level: string, index: number, totalInLevel: number, isPreview = false) => {
+      const CANVAS_WIDTH = 800;
+      const spacing = CANVAS_WIDTH / (totalInLevel + 1);
+      const x = spacing * (index + 1);
+      let y = level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
+      if (isPreview) y += 200;
+      return { x, y };
+    },
+    []
+  );
+
+  const isValidConnection = useCallback((fromBook: any, toBook: any) => {
+    if (fromBook.level === "beginner") {
+      return toBook.level === "intermediate";
+    }
+    if (fromBook.level === "intermediate") {
+      return toBook.level === "advanced";
+    }
+    return false;
+  }, []);
+
+  const getVisibleNodes = useCallback(
+    (
+      books: any[],
+      userLevel: string,
+      connections: any[],
+      expandedNodeIds: string[]
+    ) => {
+      const visibleBooks = filterInitialNodes(
+        books,
+        userLevel,
+        connections,
+        expandedNodeIds.length + 3
+      );
+
+      // Filter valid connections
+      const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
+      const validConnections = connections.filter((conn) => {
+        const isVisible =
+          visibleBookIds.includes(conn.from_book_id) &&
+          visibleBookIds.includes(conn.to_book_id);
+
+        if (!isVisible) return false;
+
+        const fromBook = books.find(
+          (b) => b.google_books_id === conn.from_book_id
+        );
+        const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
+
+        return isValidConnection(fromBook, toBook);
+      });
+
+      // Create preview nodes
+      const previewBooks = books
+        .filter((book) => !visibleBooks.includes(book))
+        .slice(0, 2)
+        .map((book, index) => ({
+          id: `preview-${book.google_books_id}`,
+          type: "previewNode",
+          position: calculatePosition(book.level, index, 2, true),
+          data: {
+            id: book.google_books_id,
+            label: book.title,
+            level: book.level,
+            status: "not_started",
+            description: book.description,
+            isAdvanced: book.level === "advanced",
+            initiallyVisible: false,
+          },
+        }));
+
+      setPreviewNodes(previewBooks);
+      return {
+        books: visibleBooks,
+        connections: validConnections,
+      };
+    },
+    [
+      setPreviewNodes,
+      filterInitialNodes,
+      calculatePosition,
+      isValidConnection,
+      previewNodes,
+    ]
   );
 
   const saveGraphLayout = useCallback(
@@ -411,6 +501,9 @@ export default function KnowledgeGraph({ params }: PageProps) {
       setNodes(initialNodes);
       setEdges(initialEdges);
       setAllBooksLoaded(true);
+      setAllBooks(books || []);
+      setAllConnections(connections || []);
+      setUserLevel(userTopic?.skill_level || "beginner");
     } catch (error) {
       console.error("Error in fetchGraphData:", error);
       toast({
@@ -424,7 +517,7 @@ export default function KnowledgeGraph({ params }: PageProps) {
     }
   }, [topicId, getVisibleNodes, router, toast, supabase]);
 
-  const handleShowMore = useCallback(() => {
+  const handleShowMore = useCallback(async () => {
     setExpandedNodes((prev) => {
       const currentlyShown = new Set(prev);
       const nextNodes = previewNodes
@@ -436,12 +529,61 @@ export default function KnowledgeGraph({ params }: PageProps) {
       saveGraphLayout();
       setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
 
+      // Use stored data instead of fetched data
+      const { books: visibleBooks, connections: validConnections } =
+        getVisibleNodes(allBooks, userLevel, allConnections, newExpanded);
+
+      // Update nodes with new visible books
+      setNodes(
+        visibleBooks.map((book, index) => ({
+          id: book.google_books_id,
+          type: "bookNode",
+          position: calculatePosition(book.level, index, visibleBooks.length),
+          data: {
+            id: book.google_books_id,
+            label: book.title,
+            level: book.level,
+            status: "not_started",
+            description: book.description,
+            onClick: () =>
+              setSelectedBook({
+                id: book.google_books_id,
+                title: book.title,
+                description: book.description,
+                status: "not_started",
+              }),
+          },
+        }))
+      );
+
+      // Let getVisibleNodes handle all connections
+      setEdges(
+        validConnections.map((conn) => ({
+          id: `${conn.from_book_id}-${conn.to_book_id}`,
+          source: conn.from_book_id,
+          target: conn.to_book_id,
+          type: "bezier",
+          animated: true,
+        }))
+      );
+
       // Remove used preview nodes
       setPreviewNodes((prev) => prev.slice(3));
 
       return newExpanded;
     });
-  }, [previewNodes, nodes.length, saveGraphLayout]);
+  }, [
+    previewNodes,
+    nodes.length,
+    saveGraphLayout,
+    topicId,
+    getVisibleNodes,
+    calculatePosition,
+    edges,
+    allBooks,
+    userLevel,
+    allConnections,
+  ]);
 
   useEffect(() => {
     fetchGraphData();
@@ -535,89 +677,22 @@ export default function KnowledgeGraph({ params }: PageProps) {
     return () => clearInterval(pollInterval);
   }, [analysisInProgress, unanalyzedBooks]);
 
-  // Add calculatePosition
-  const calculatePosition = useCallback(
-    (level: string, index: number, totalInLevel: number, isPreview = false) => {
-      const CANVAS_WIDTH = 800;
-      const spacing = CANVAS_WIDTH / (totalInLevel + 1);
-      const x = spacing * (index + 1);
-      let y = level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
-      if (isPreview) y += 200;
-      return { x, y };
-    },
-    []
-  );
-
-  // Move isValidConnection inside
-  const isValidConnection = useCallback((fromBook: any, toBook: any) => {
-    if (fromBook.level === "beginner") {
-      return toBook.level === "intermediate";
-    }
-    if (fromBook.level === "intermediate") {
-      return toBook.level === "advanced";
-    }
-    return false;
-  }, []);
-
-  // Move getVisibleNodes inside and make it useCallback
-  const getVisibleNodes = useCallback(
-    (
-      books: any[],
-      userLevel: string,
-      connections: any[],
-      expandedNodeIds: string[]
-    ) => {
-      const visibleBooks = filterInitialNodes(
-        books,
-        userLevel,
-        connections,
-        expandedNodeIds.length + 3
-      );
-
-      // Filter valid connections
-      const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
-      const validConnections = connections.filter((conn) => {
-        const isVisible =
-          visibleBookIds.includes(conn.from_book_id) &&
-          visibleBookIds.includes(conn.to_book_id);
-
-        if (!isVisible) return false;
-
-        const fromBook = books.find(
-          (b) => b.google_books_id === conn.from_book_id
-        );
-        const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
-
-        return isValidConnection(fromBook, toBook);
+  const analyzeBooks = async (books: any[], topic: any) => {
+    try {
+      const response = await fetch("/api/analyze-books", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ books, topic }),
       });
 
-      // Create preview nodes
-      const previewBooks = books
-        .filter((book) => !visibleBooks.includes(book))
-        .slice(0, 2)
-        .map((book, index) => ({
-          id: `preview-${book.google_books_id}`,
-          type: "previewNode",
-          position: calculatePosition(book.level, index, 2, true),
-          data: {
-            id: book.google_books_id,
-            label: book.title,
-            level: book.level,
-            status: "not_started",
-            description: book.description,
-            isAdvanced: book.level === "advanced",
-            initiallyVisible: false,
-          },
-        }));
-
-      setPreviewNodes(previewBooks);
-      return {
-        books: visibleBooks,
-        connections: validConnections,
-      };
-    },
-    [setPreviewNodes, filterInitialNodes, calculatePosition, isValidConnection]
-  );
+      if (!response.ok)
+        throw new Error(`Failed to analyze books: ${response.statusText}`);
+      return await response.json();
+    } catch (error) {
+      console.error("Error in analyzeBooks:", error);
+      throw error;
+    }
+  };
 
   return (
     <div className="p-4 w-full min-h-screen">
@@ -700,6 +775,7 @@ export default function KnowledgeGraph({ params }: PageProps) {
           setNodes((prevNodes) => {
             const newNodes = prevNodes.map((node) => {
               if (node.id === id) {
+                console.log("Updating node:", node.id);
                 return {
                   ...node,
                   data: {
@@ -712,6 +788,28 @@ export default function KnowledgeGraph({ params }: PageProps) {
             });
             return newNodes;
           });
+
+          supabase
+            .from("User_Progress")
+            .upsert(
+              {
+                user_id: user?.id,
+                book_id: id,
+                status: status,
+              },
+              {
+                onConflict: "user_id,book_id",
+              }
+            )
+            .then(({ error }) => {
+              if (error) {
+                console.error("Error updating book status:", error);
+                toast({
+                  description: "Failed to update book status",
+                  variant: "destructive",
+                });
+              }
+            });
         }}
       />
     </div>
