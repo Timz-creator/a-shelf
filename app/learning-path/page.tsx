@@ -123,52 +123,23 @@ export default function KnowledgeGraph() {
           return;
         }
 
-        // Prepare layout
-        const layout = {
-          nodes: nodes.map((node) => ({
-            id: node.id,
-            type: "bookNode",
-            position: node.position,
-            data: {
-              id: node.id,
-              label: node.data.label,
-              level: node.data.level,
-              status: node.data.status,
-              description: node.data.description,
-              isAdvanced: node.data.level === "advanced",
-              initiallyVisible: nodes.indexOf(node) < 3,
-            },
-          })),
-          edges: edges.map((edge) => ({
-            id: edge.id,
-            source: edge.source,
-            target: edge.target,
-            type: "bezier",
-          })),
-          previewNodes: previewNodes.map((node) => ({
-            id: node.id,
-            type: "previewNode",
-            position: node.position,
-            data: node.data,
-          })),
-          expandedNodes,
-          visibleCount,
-          lastSaved: new Date().toISOString(),
-        };
-
-        // Validate layout
-        if (!layout || typeof layout !== "object") {
-          console.error("Invalid layout data:", layout);
-          setSaveStatus("error");
-          return;
-        }
+        // Save only positions and state
+        const nodePositions = nodes.reduce(
+          (acc, node) => ({
+            ...acc,
+            [node.id]: node.position,
+          }),
+          {}
+        );
 
         // Save to Supabase
-        const { data, error } = await supabase.from("User_Graph").upsert(
+        const { error } = await supabase.from("User_Graph").upsert(
           {
             user_id: user.id,
             topic_id: currentTopic.topic_id,
-            graph_layout: layout,
+            node_positions: nodePositions,
+            expanded_nodes: expandedNodes,
+            visible_count: visibleCount,
           },
           { onConflict: "user_id,topic_id" }
         );
@@ -261,7 +232,7 @@ export default function KnowledgeGraph() {
     });
   }, [previewNodes, nodes.length, saveGraphLayout]);
 
-  const fetchGraphData = async () => {
+  const fetchGraphData = useCallback(async () => {
     try {
       setLoading(true);
       setPartialGraph(false);
@@ -296,6 +267,14 @@ export default function KnowledgeGraph() {
 
       const mostRecentTopic = userTopics[0];
       setCurrentTopic(mostRecentTopic);
+
+      // Get saved graph data if it exists
+      const { data: savedGraph } = await supabase
+        .from("User_Graph")
+        .select("node_positions, expanded_nodes, visible_count")
+        .eq("user_id", user.id)
+        .eq("topic_id", mostRecentTopic.topic_id)
+        .single();
 
       const { data: books } = await supabase
         .from("Books")
@@ -340,7 +319,8 @@ export default function KnowledgeGraph() {
           books,
           mostRecentTopic.skill_level,
           connections,
-          expandedNodes
+          // Use saved expanded nodes if they exist
+          savedGraph?.expanded_nodes || expandedNodes
         );
 
         // Log initial books and connections
@@ -372,6 +352,11 @@ export default function KnowledgeGraph() {
           console.log(`Creating ${level} nodes:`, books);
 
           return books.map((book, index) => {
+            // Use saved position or calculate new one
+            const position =
+              savedGraph?.node_positions?.[book.google_books_id] ||
+              calculatePosition(level, index, books.length);
+
             const nodeData = {
               id: book.google_books_id,
               type: "bookNode",
@@ -392,7 +377,7 @@ export default function KnowledgeGraph() {
                     status: book.status || "not_started",
                   }),
               },
-              position: calculatePosition(level, index, books.length),
+              position: position,
               sourceConnections: books
                 .filter((b) => isValidConnection(book, b))
                 .map((b) => b.google_books_id),
@@ -420,6 +405,13 @@ export default function KnowledgeGraph() {
 
         setNodes(nodes);
         setEdges(edges);
+        // Restore saved state
+        if (savedGraph) {
+          if (!expandedNodes.length) {
+            setExpandedNodes(savedGraph.expanded_nodes);
+            setVisibleCount(savedGraph.visible_count);
+          }
+        }
       }
     } catch (error) {
       console.error("Error in fetchGraphData:", error);
@@ -427,13 +419,22 @@ export default function KnowledgeGraph() {
       setLoading(false);
       setLastUpdateTime(new Date());
     }
-  };
+  }, [
+    supabase,
+    setCurrentTopic,
+    setNodes,
+    setEdges,
+    setExpandedNodes,
+    setVisibleCount,
+  ]);
 
-  // Update useEffect to run when expandedNodes changes
+  // Update useEffect to run when user is available
   useEffect(() => {
     console.log("Fetching graph data. Expanded nodes:", expandedNodes);
-    fetchGraphData();
-  }, [expandedNodes]); // Add expandedNodes to dependencies
+    if (user) {
+      fetchGraphData();
+    }
+  }, [user, fetchGraphData]); // Only depend on user and fetchGraphData
 
   // Add polling for analysis updates
   useEffect(() => {
