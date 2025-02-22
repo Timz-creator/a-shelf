@@ -8,9 +8,16 @@ import {
   Edge,
   Controls,
   Background,
+  NodeChange,
+  EdgeChange,
+  Connection as FlowConnection,
   applyNodeChanges,
   applyEdgeChanges,
   addEdge,
+  BackgroundVariant,
+  OnNodesChange,
+  OnEdgesChange,
+  OnConnect,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -27,20 +34,62 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { toast } from "@/hooks/use-toast";
 import debounce from "lodash/debounce";
-import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+
+interface Book {
+  google_books_id: string;
+  title: string;
+  level: "beginner" | "intermediate" | "advanced";
+  status?: ProgressStatus["status"];
+  description: string;
+  analyzed: boolean;
+  topic_id: string;
+}
+
+interface BookNodeData {
+  id: string;
+  title: string;
+  description: string;
+  isAdvanced: boolean;
+  status: ProgressStatus["status"];
+}
+
+interface User {
+  id: string;
+  email?: string;
+}
+
+interface Connection {
+  from_book_id: string;
+  to_book_id: string;
+}
+
+interface ProgressStatus {
+  status: "not_started" | "in_progress" | "completed";
+}
+
+interface CustomNodeChange extends NodeChange {
+  id: string;
+}
+
+interface CustomEdgeChange extends EdgeChange {
+  id: string;
+  item?: Edge;
+}
+
+interface CustomConnectParams extends Connection {
+  id: string;
+}
 
 // Move isValidConnection outside of fetchGraphData
-const isValidConnection = (fromBook: any, toBook: any) => {
-  // Only allow progression from beginner -> intermediate -> advanced
+const isValidConnection = (fromBook: Book, toBook: Book): boolean => {
+  if (!fromBook || !toBook) return false;
+
   if (fromBook.level === "beginner") {
     return toBook.level === "intermediate";
   }
   if (fromBook.level === "intermediate") {
     return toBook.level === "advanced";
   }
-  // Don't allow advanced books to connect forward
-  // Don't allow any backwards connections
   return false;
 };
 
@@ -51,7 +100,7 @@ interface CustomNode extends Node {
     id: string;
     label: string;
     level: string;
-    status: string;
+    status: ProgressStatus["status"];
     description: string;
     isAdvanced?: boolean;
     initiallyVisible?: boolean;
@@ -65,35 +114,45 @@ const calculatePosition = (
   totalInLevel: number,
   isPreview = false
 ) => {
-  const CANVAS_WIDTH = 800;
-  const spacing = CANVAS_WIDTH / (totalInLevel + 1);
-  const x = spacing * (index + 1);
-  let y = level === "beginner" ? 100 : level === "intermediate" ? 300 : 500;
-  if (isPreview) y += 200; // Position preview nodes lower
+  const CANVAS_HEIGHT = 600;
+  const spacing = CANVAS_HEIGHT / (totalInLevel + 1);
+  const y = spacing * (index + 1);
+  // Position nodes horizontally based on level
+  let x = level === "beginner" ? 100 : level === "intermediate" ? 400 : 700;
+  if (isPreview) x += 200;
   return { x, y };
 };
+
+interface VisibleNodesResult {
+  books: Book[];
+  connections: Connection[];
+}
+
+interface TopicData {
+  topic_id: string;
+  skill_level: string;
+  status: string;
+}
 
 export default function KnowledgeGraph() {
   const [loading, setLoading] = useState(true);
   const [nodes, setNodes] = useState<CustomNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [currentTopic, setCurrentTopic] = useState<{
     topic_id: string;
     skill_level: string;
     status: string;
   } | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<string[]>([]);
-  const [visibleCount, setVisibleCount] = useState(5); // Start with 5 nodes
-  const [selectedBook, setSelectedBook] = useState<BookNodeData | null>(null); // Track selected book
+  const [visibleCount, setVisibleCount] = useState(3);
+  const [selectedBook, setSelectedBook] = useState<BookNodeData | null>(null);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">(
     "saved"
   );
   const [analysisInProgress, setAnalysisInProgress] = useState(false);
   const [unanalyzedBooks, setUnanalyzedBooks] = useState<string[]>([]);
   const [partialGraph, setPartialGraph] = useState(false);
-  const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
-  const [previewNodes, setPreviewNodes] = useState<CustomNode[]>([]);
   const supabase = createClientComponentClient();
 
   // Get user on mount
@@ -161,76 +220,35 @@ export default function KnowledgeGraph() {
         setSaveStatus("error");
       }
     }, 1000),
-    [
-      nodes,
-      edges,
-      expandedNodes,
-      visibleCount,
-      currentTopic,
-      user,
-      previewNodes,
-    ]
+    [nodes, edges, expandedNodes, visibleCount, currentTopic, user]
   );
 
   // Update existing callbacks to save layout
-  const onNodesChange = useCallback(
+  const onNodesChange: OnNodesChange = useCallback(
     (changes) => {
-      setNodes((nds) => applyNodeChanges(changes, nds));
-      saveGraphLayout(); // Save when nodes move
+      setNodes(
+        (nds: CustomNode[]) => applyNodeChanges(changes, nds) as CustomNode[]
+      );
+      saveGraphLayout();
     },
     [saveGraphLayout]
   );
 
-  const onEdgesChange = useCallback(
+  const onEdgesChange: OnEdgesChange = useCallback(
     (changes) => {
       setEdges((eds) => applyEdgeChanges(changes, eds));
-      saveGraphLayout(); // Save when edges change
-    },
-    [saveGraphLayout]
-  );
-
-  const onConnect = useCallback(
-    (params) => {
-      setEdges((eds) => addEdge(params, eds));
-      saveGraphLayout(); // Save when new connections are made
-    },
-    [saveGraphLayout]
-  );
-
-  // Add node click handler
-  const onNodeClick = useCallback(
-    (event: any, node: Node) => {
-      setExpandedNodes((prev) => {
-        const isExpanded = prev.includes(node.id);
-        const newExpanded = isExpanded
-          ? prev.filter((id) => id !== node.id)
-          : [...prev, node.id];
-        saveGraphLayout(); // Save when nodes expand/collapse
-        return newExpanded;
-      });
-    },
-    [saveGraphLayout]
-  );
-
-  // Updates the graph to show more nodes when user clicks "Show More"
-  const handleShowMore = useCallback(() => {
-    setExpandedNodes((prev) => {
-      const currentlyShown = new Set(prev);
-      const nextNodes = previewNodes
-        .filter((node) => !currentlyShown.has(node.data.id))
-        .slice(0, 3)
-        .map((node) => node.data.id);
-
-      const newExpanded = [...prev, ...nextNodes];
       saveGraphLayout();
-      setVisibleCount((prev) => Math.min(prev + 3, nodes.length));
+    },
+    [saveGraphLayout]
+  );
 
-      // Remove used preview nodes
-      setPreviewNodes((prev) => prev.slice(3));
-
-      return newExpanded;
-    });
-  }, [previewNodes, nodes.length, saveGraphLayout]);
+  const onConnect: OnConnect = useCallback(
+    (params: FlowConnection) => {
+      setEdges((eds) => addEdge(params, eds));
+      saveGraphLayout();
+    },
+    [saveGraphLayout]
+  );
 
   const fetchGraphData = useCallback(async () => {
     try {
@@ -255,7 +273,7 @@ export default function KnowledgeGraph() {
       const { data: userTopics } = await supabase
         .from("User_Topics")
         .select("topic_id, status, skill_level")
-        .eq("user_id", user.id)
+        .eq("user_id", user?.id ?? "")
         .eq("status", "in_progress")
         .order("created_at", { ascending: false });
 
@@ -272,7 +290,7 @@ export default function KnowledgeGraph() {
       const { data: savedGraph } = await supabase
         .from("User_Graph")
         .select("node_positions, expanded_nodes, visible_count")
-        .eq("user_id", user.id)
+        .eq("user_id", user?.id ?? "")
         .eq("topic_id", mostRecentTopic.topic_id)
         .single();
 
@@ -352,14 +370,15 @@ export default function KnowledgeGraph() {
           console.log(`Creating ${level} nodes:`, books);
 
           return books.map((book, index) => {
-            // Use saved position or calculate new one
             const position =
               savedGraph?.node_positions?.[book.google_books_id] ||
               calculatePosition(level, index, books.length);
 
-            const nodeData = {
+            return {
               id: book.google_books_id,
               type: "bookNode",
+              sourcePosition: "right",
+              targetPosition: "left",
               data: {
                 id: book.google_books_id,
                 label: book.title,
@@ -367,7 +386,6 @@ export default function KnowledgeGraph() {
                 status: book.status || "not_started",
                 isAdvanced: book.level === "advanced",
                 description: book.description,
-                initiallyVisible: index < 3, // First 3 nodes are visible
                 onClick: () =>
                   setSelectedBook({
                     id: book.google_books_id,
@@ -377,7 +395,7 @@ export default function KnowledgeGraph() {
                     status: book.status || "not_started",
                   }),
               },
-              position: position,
+              position,
               sourceConnections: books
                 .filter((b) => isValidConnection(book, b))
                 .map((b) => b.google_books_id),
@@ -385,31 +403,36 @@ export default function KnowledgeGraph() {
                 .filter((b) => isValidConnection(b, book))
                 .map((b) => b.google_books_id),
             };
-
-            console.log("Node data:", nodeData);
-            return nodeData;
           });
         });
 
         // Create edges from valid connections
-        const edges = visibleData.connections.map((conn) => {
-          console.log("Creating edge for connection:", conn);
-          return {
-            id: `${conn.from_book_id}-${conn.to_book_id}`,
-            source: conn.from_book_id,
-            target: conn.to_book_id,
-            animated: true,
-            type: "bezier",
-          };
-        });
+        const edges = visibleData.connections.map((conn: Connection) => ({
+          id: `${conn.from_book_id}-${conn.to_book_id}`,
+          source: conn.from_book_id,
+          target: conn.to_book_id,
+          animated: true,
+          type: "smoothstep",
+        }));
 
         setNodes(nodes);
         setEdges(edges);
         // Restore saved state
         if (savedGraph) {
           if (!expandedNodes.length) {
-            setExpandedNodes(savedGraph.expanded_nodes);
-            setVisibleCount(savedGraph.visible_count);
+            const savedExpandedNodes = savedGraph.expanded_nodes;
+            const savedVisibleCount = savedGraph.visible_count;
+
+            // Calculate preview nodes based on saved state
+            const visibleData = getVisibleNodes(
+              books,
+              mostRecentTopic.skill_level,
+              connections,
+              savedExpandedNodes
+            );
+
+            setExpandedNodes(savedExpandedNodes);
+            setVisibleCount(savedVisibleCount);
           }
         }
       }
@@ -417,7 +440,6 @@ export default function KnowledgeGraph() {
       console.error("Error in fetchGraphData:", error);
     } finally {
       setLoading(false);
-      setLastUpdateTime(new Date());
     }
   }, [
     supabase,
@@ -471,7 +493,7 @@ export default function KnowledgeGraph() {
                 source: conn.from_book_id,
                 target: conn.to_book_id,
                 animated: true,
-                type: "bezier",
+                type: "smoothstep",
               }));
               return [...currentEdges, ...newEdges];
             });
@@ -489,6 +511,27 @@ export default function KnowledgeGraph() {
     return () => clearInterval(pollInterval);
   }, [analysisInProgress, unanalyzedBooks]);
 
+  // Add state verification logging
+  useEffect(() => {
+    console.log("Graph State Verification:", {
+      totalNodes: nodes.length,
+      visibleCount,
+      expandedNodesCount: expandedNodes.length,
+      saveStatus,
+      analysisInProgress,
+      unanalyzedBooksCount: unanalyzedBooks.length,
+      partialGraph,
+    });
+  }, [
+    nodes.length,
+    visibleCount,
+    expandedNodes,
+    saveStatus,
+    analysisInProgress,
+    unanalyzedBooks,
+    partialGraph,
+  ]);
+
   console.log("Rendering with:", {
     nodesLength: nodes.length,
     edgesLength: edges.length,
@@ -497,9 +540,9 @@ export default function KnowledgeGraph() {
 
   // Update filterInitialNodes to handle progressive reveal
   const filterInitialNodes = (
-    books: any[],
+    books: Book[],
     userLevel: string,
-    connections: any[],
+    connections: Connection[],
     showCount: number = 5
   ) => {
     // Group books by level
@@ -561,85 +604,46 @@ export default function KnowledgeGraph() {
   // Update getVisibleNodes to handle connections and previews
   const getVisibleNodes = useCallback(
     (
-      books: any[],
+      books: Book[],
       userLevel: string,
-      connections: any[],
+      connections: Connection[],
       expandedNodeIds: string[]
-    ) => {
-      const visibleBooks = filterInitialNodes(
-        books,
+    ): VisibleNodesResult => {
+      console.log("GetVisibleNodes Input:", {
+        booksCount: books.length,
         userLevel,
-        connections,
-        expandedNodeIds.length + 3
+        connectionsCount: connections.length,
+        expandedNodeIds,
+      });
+
+      const visibleBooks = books.filter(
+        (book) =>
+          expandedNodeIds.includes(book.google_books_id) ||
+          expandedNodeIds.length < 3
       );
 
-      // Get preview books (next 2-3 after visible ones)
-      const previewBooks = books
-        .filter((book) => !visibleBooks.includes(book))
-        .slice(0, 2)
-        .map((book, index) => ({
-          id: `preview-${book.google_books_id}`,
-          type: "previewNode",
-          position: calculatePosition(book.level, index, 2, true),
-          data: {
-            id: book.google_books_id,
-            label: book.title,
-            level: book.level,
-            status: "not_started",
-            description: book.description,
-            isAdvanced: book.level === "advanced",
-            initiallyVisible: false,
-          },
-        }));
-
-      setPreviewNodes(previewBooks);
-
-      const visibleBookIds = visibleBooks.map((b) => b.google_books_id);
-      const validConnections = connections.filter((conn) => {
-        const isVisible =
-          visibleBookIds.includes(conn.from_book_id) &&
-          visibleBookIds.includes(conn.to_book_id);
-
-        console.log("Connection check:", {
-          connection: conn,
-          isVisible,
-          fromBookExists: visibleBookIds.includes(conn.from_book_id),
-          toBookExists: visibleBookIds.includes(conn.to_book_id),
-        });
-
-        if (!isVisible) return false;
-
-        const fromBook = books.find(
-          (b) => b.google_books_id === conn.from_book_id
-        );
-        const toBook = books.find((b) => b.google_books_id === conn.to_book_id);
-
-        const isValid = isValidConnection(fromBook, toBook);
-        console.log("Connection validation:", {
-          fromBook: fromBook?.title,
-          toBook: toBook?.title,
-          isValid,
-        });
-
-        return isValid;
+      console.log("GetVisibleNodes Output:", {
+        visibleBooksCount: visibleBooks.length,
+        expandedNodesCount: expandedNodeIds.length,
       });
-
-      console.log("Final output:", {
-        visibleBooks: visibleBooks.length,
-        validConnections: validConnections.length,
-      });
-
-      console.log("Valid connections after filtering:", validConnections);
 
       return {
         books: visibleBooks,
-        connections: validConnections,
+        connections: connections.filter(
+          (conn) =>
+            visibleBooks.some(
+              (book) => book.google_books_id === conn.from_book_id
+            ) &&
+            visibleBooks.some(
+              (book) => book.google_books_id === conn.to_book_id
+            )
+        ),
       };
     },
     []
   );
 
-  const analyzeBooks = async (books: any[], topic: any) => {
+  const analyzeBooks = async (books: Book[], topic: TopicData) => {
     console.log("Attempting to analyze books:", {
       booksCount: books.length,
       topic,
@@ -704,13 +708,6 @@ export default function KnowledgeGraph() {
                     } books`}
               </CardDescription>
             </div>
-            <Button
-              onClick={handleShowMore}
-              className="bg-black text-white font-medium"
-              disabled={expandedNodes.length >= nodes.length || loading}
-            >
-              Show More
-            </Button>
           </div>
         </CardHeader>
         <CardContent className="h-[calc(100%-100px)] p-0 relative">
@@ -733,7 +730,7 @@ export default function KnowledgeGraph() {
           ) : (
             <>
               <ReactFlow
-                nodes={[...nodes, ...previewNodes]}
+                nodes={nodes}
                 edges={edges}
                 nodeTypes={nodeTypes}
                 onNodesChange={onNodesChange}
@@ -742,7 +739,7 @@ export default function KnowledgeGraph() {
                 fitView
                 style={{ width: "100%", height: "100%" }}
               >
-                <Background color="#f0f0f0" variant="dots" />
+                <Background color="#f0f0f0" variant={BackgroundVariant.Dots} />
                 <Controls />
               </ReactFlow>
             </>
